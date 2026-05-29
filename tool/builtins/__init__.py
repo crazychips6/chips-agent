@@ -1,0 +1,5 @@
+"""内置工具 — 导入即触发自注册
+
+通过 import 的副作用触发各工具的 registry.register()。
+agent/cli.py 中 import tool.builtins 即可完成所有内置工具注册，
+agent 代码无需直接引用任何具体工具实现。"""
