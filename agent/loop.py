@@ -1,11 +1,14 @@
 """AIAgent — ReAct 循环"""
 
 import json
+import os
 
 from openai import OpenAI
 
 from agent.prompt import PromptBuilder
 from tool.registry import ToolRegistry
+
+_DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "log", "debug", "session.json")
 
 
 class AIAgent:
@@ -14,11 +17,13 @@ class AIAgent:
         api_key: str,
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-chat",
+        debug_context: bool = False,
     ):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
+        self.debug_context = debug_context
         self.prompt_builder = PromptBuilder()
-        # registry/tool_names 由外部注入，后续阶段改为构造参数注入
+        # registry + tool_names 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
@@ -51,6 +56,14 @@ class AIAgent:
         system = self.prompt_builder.build()
         self.messages.append({"role": "user", "content": user_message})
 
+        # 每次 session 开始时创建目录并写空数组，清空上次内容
+        if self.debug_context:
+            os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
+            with open(_DEBUG_LOG, "w") as f:
+                json.dump([], f)
+
+        rounds = [] if self.debug_context else None
+
         # ReAct 循环：工具调用 → 结果回填 → 继续，直到 LLM 返回纯文本回复
         for _ in range(max_iterations):
             kwargs = {
@@ -66,6 +79,11 @@ class AIAgent:
 
             response = self.client.chat.completions.create(**kwargs)
             msg = response.choices[0].message
+
+            if self.debug_context:
+                rounds.append({"request": kwargs, "response": {"content": msg.content, "reasoning_content": getattr(msg, "reasoning_content", None), "tool_calls": [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in (msg.tool_calls or [])]}})
+                with open(_DEBUG_LOG, "w") as f:
+                    json.dump(rounds, f, ensure_ascii=False, indent=2)
 
             if msg.tool_calls:
                 # 先追加 assistant 消息（含 tool_calls），再逐个派发并将结果追加为 tool 消息

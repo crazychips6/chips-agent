@@ -14,5 +14,8 @@ memory/__init__.py
 safety/__init__.py
 session/__init__.py
 test/__init__.py
+test/test_registry.py
 tool/__init__.py
+tool/registry.py
 tool/builtins/__init__.py
+tool/builtins/echo.py

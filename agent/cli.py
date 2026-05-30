@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--base-url", default=os.getenv("CHIPS_BASE_URL", "https://api.deepseek.com"))
     parser.add_argument("--message", "-m", help="Single message and exit")
     parser.add_argument("--version", action="store_true")
+    parser.add_argument("--debug-context", action="store_true", help="将每轮 LLM 请求/响应写入 log/debug/session.json")
     args = parser.parse_args()
 
     if args.version:
@@ -35,7 +36,7 @@ def main():
         print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
         return
 
-    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model)
+    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     agent.tool_names = registry.tool_names
