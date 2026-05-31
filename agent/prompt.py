@@ -1,12 +1,16 @@
 class PromptBuilder:
     """System prompt 组装器。
 
-    当前仅返回单层默认 prompt。后续阶段将实现 7 层组装：
+    当前仅拼接 2 层：核心身份 + 记忆快照。
+    后续阶段将实现 7 层组装：
     (1) 核心身份 (2) 当前日期 (3) 用户偏好 (4) 记忆快照 (5) 项目上下文 (6) 工具规则 (7) 调用约定
     """
 
-    def build(self) -> str:
-        return DEFAULT_SYSTEM_PROMPT
+    def build(self, memory_snapshot: str = "") -> str:
+        prompt = DEFAULT_SYSTEM_PROMPT
+        if memory_snapshot:
+            prompt += f"\n\n{memory_snapshot}"
+        return prompt
 
 
 DEFAULT_SYSTEM_PROMPT = """你是 chips，一个通用 AI agent。

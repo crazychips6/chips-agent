@@ -206,7 +206,7 @@ chips-agent/
 | 1—最小 ReAct | ✅ | 2026-05-28 |
 | 2—ToolRegistry | ✅ | 2026-05-28 |
 | 3—TOOLSETS | ✅ | 2026-05-30 |
-| 4—Memory | ❌ | |
+| 4—Memory | ✅ | 2026-05-31 |
 | 5—System Prompt | ❌ | |
 | 6—安全审批 | ❌ | |
 | 7—Session+日志 | ❌ | |

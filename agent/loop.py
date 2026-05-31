@@ -6,6 +6,7 @@ import os
 from openai import OpenAI
 
 from agent.prompt import PromptBuilder
+from memory.store import MemoryStore
 from tool.registry import ToolRegistry
 
 _DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "log", "debug", "session.json")
@@ -23,9 +24,10 @@ class AIAgent:
         self.model = model
         self.debug_context = debug_context
         self.prompt_builder = PromptBuilder()
-        # registry + tool_names 由外部注入，后续阶段改为构造参数注入
+        # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
+        self.memory: MemoryStore | None = None
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
         self.messages: list[dict] = []
 
@@ -53,7 +55,8 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
         # system prompt 每次重新构建，以便后续阶段支持动态上下文层
-        system = self.prompt_builder.build()
+        memory_snapshot = self.memory.for_system_prompt() if self.memory else ""
+        system = self.prompt_builder.build(memory_snapshot=memory_snapshot)
         self.messages.append({"role": "user", "content": user_message})
 
         # 每次 session 开始时创建目录并写空数组，清空上次内容
