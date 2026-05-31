@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from agent.loop import AIAgent
 from tool.registry import registry
+from tool.toolsets import resolve_toolset
 
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
@@ -24,6 +25,7 @@ def main():
     parser.add_argument("--message", "-m", help="Single message and exit")
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--debug-context", action="store_true", help="将每轮 LLM 请求/响应写入 log/debug/session.json")
+    parser.add_argument("--toolset", default="core", help="使用的工具集，默认 core")
     args = parser.parse_args()
 
     if args.version:
@@ -39,7 +41,7 @@ def main():
     agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
-    agent.tool_names = registry.tool_names
+    agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
 
     if args.message:
         reply = agent.run_conversation(args.message)
@@ -47,7 +49,7 @@ def main():
         return
 
     print(f"chips v0.1.0 — model: {args.model}  base_url: {args.base_url}")
-    print(f"已加载工具: {len(agent.tool_names)}")
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}")
     print("输入 /help 查看命令, /exit 退出")
 
     # 交互式 REPL：每次输入触发一次 LLM 对话

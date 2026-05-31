@@ -205,7 +205,7 @@ chips-agent/
 | 0—项目脚手架 | ✅ | 2026-05-28 |
 | 1—最小 ReAct | ✅ | 2026-05-28 |
 | 2—ToolRegistry | ✅ | 2026-05-28 |
-| 3—TOOLSETS | ❌ | |
+| 3—TOOLSETS | ✅ | 2026-05-30 |
 | 4—Memory | ❌ | |
 | 5—System Prompt | ❌ | |
 | 6—安全审批 | ❌ | |
