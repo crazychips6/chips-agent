@@ -207,7 +207,7 @@ chips-agent/
 | 2—ToolRegistry | ✅ | 2026-05-28 |
 | 3—TOOLSETS | ✅ | 2026-05-30 |
 | 4—Memory | ✅ | 2026-05-31 |
-| 5—System Prompt | ❌ | |
+| 5—System Prompt | ✅ | 2026-06-01 |
 | 6—安全审批 | ❌ | |
 | 7—Session+日志 | ❌ | |
 | 8—沙盒环境 | ❌ | |

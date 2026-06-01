@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 
 from agent.loop import AIAgent
+from agent.prompt import search_context_files
 from memory.store import MemoryStore
 from tool.registry import registry
 from tool.toolsets import resolve_toolset
@@ -28,6 +29,7 @@ def main():
     parser.add_argument("--debug-context", action="store_true", help="将每轮 LLM 请求/响应写入 log/debug/session.json")
     parser.add_argument("--toolset", default="core", help="使用的工具集，默认 core")
     parser.add_argument("--no-memory", action="store_true", help="禁用记忆系统")
+    parser.add_argument("--verbose", action="store_true", help="显示 system prompt 各层详情")
     args = parser.parse_args()
 
     if args.version:
@@ -40,10 +42,15 @@ def main():
         print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
         return
 
-    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context)
+    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context, verbose=args.verbose)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
+
+    # 在 CWD 搜索上下文文件并注入 agent
+    context_files = search_context_files()
+    if context_files:
+        agent.context_files = context_files
 
     if not args.no_memory:
         import tool.builtins.memory as memory_tool
@@ -62,8 +69,9 @@ def main():
 
     memory_snapshot = agent.memory.for_system_prompt() if agent.memory else ""
     memory_lines = len([l for l in memory_snapshot.split("\n") if l.strip()]) if memory_snapshot else 0
+    ctx_count = len(agent.context_files)
     print(f"chips v0.1.0 — model: {args.model}  base_url: {args.base_url}")
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {memory_lines} 行")
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {memory_lines} 行  |  上下文文件: {ctx_count}")
     print("输入 /help 查看命令, /exit 退出")
 
     # 交互式 REPL：每次输入触发一次 LLM 对话

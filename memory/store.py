@@ -46,6 +46,10 @@ class MemoryStore:
             parts.append(f"## 关于用户\n{self._snapshot['user']}")
         return "\n\n".join(parts)
 
+    def get_all(self) -> dict[str, str]:
+        """返回原始快照 dict，供 PromptBuilder 分 layer 注入。"""
+        return dict(self._snapshot)
+
     def add(self, content: str, category: str = "memory") -> dict:
         """追加记忆并原子写回，同时更新内存快照。"""
         if category not in ("memory", "user"):

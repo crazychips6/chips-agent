@@ -2,8 +2,17 @@
 
 import json
 import os
+import re
 
 from openai import OpenAI
+
+# 移除 surrogate 字符（如 DeepSeek reasoning_content 中可能出现的 \udce4），
+# 防止后续请求序列化时 UnicodeEncodeError: surrogates not allowed
+_SURROGATE_RE = re.compile('[\ud800-\udfff]')
+
+
+def _sanitize(text: str) -> str:
+    return _SURROGATE_RE.sub("", text)
 
 from agent.prompt import PromptBuilder
 from memory.store import MemoryStore
@@ -19,15 +28,19 @@ class AIAgent:
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-chat",
         debug_context: bool = False,
+        verbose: bool = False,
     ):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.debug_context = debug_context
-        self.prompt_builder = PromptBuilder()
+        self.verbose = verbose
+        self.prompt_builder = PromptBuilder(verbose=verbose)
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
         self.memory: MemoryStore | None = None
+        # 上下文文件列表，由 cli.py 在启动时搜索注入
+        self.context_files: list[tuple[str, str, str]] = []
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
         self.messages: list[dict] = []
 
@@ -37,17 +50,20 @@ class AIAgent:
         单独抽离的原因：DeepSeek 的 reasoning_content 字段必须保留并在后续请求中
         原样回传，否则思考链会断裂。OpenAI SDK 的 msg 对象是只读的，需要转成普通 dict。
         """
-        d = {"role": "assistant", "content": msg.content or ""}
+        d = {"role": "assistant", "content": _sanitize(msg.content or "")}
         # DeepSeek 专有字段：非流式模式下通过 reasoning_content 返回思考链
         rc = getattr(msg, "reasoning_content", None)
         if rc:
-            d["reasoning_content"] = rc
+            d["reasoning_content"] = _sanitize(rc)
         if msg.tool_calls:
             d["tool_calls"] = [
                 {
                     "id": tc.id,
                     "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    "function": {
+                        "name": _sanitize(tc.function.name),
+                        "arguments": _sanitize(tc.function.arguments),
+                    },
                 }
                 for tc in msg.tool_calls
             ]
@@ -55,9 +71,15 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
         # system prompt 每次重新构建，以便后续阶段支持动态上下文层
-        memory_snapshot = self.memory.for_system_prompt() if self.memory else ""
-        system = self.prompt_builder.build(memory_snapshot=memory_snapshot)
-        self.messages.append({"role": "user", "content": user_message})
+        memory_data = self.memory.get_all() if self.memory else {}
+        tool_defs = self.registry.get_definitions(self.tool_names) if self.registry else []
+        system = self.prompt_builder.build(
+            memory=memory_data.get("memory", ""),
+            user=memory_data.get("user", ""),
+            context_files=self.context_files,
+            tool_defs=tool_defs,
+        )
+        self.messages.append({"role": "user", "content": _sanitize(user_message)})
 
         # 每次 session 开始时创建目录并写空数组，清空上次内容
         if self.debug_context:

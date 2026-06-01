@@ -68,3 +68,16 @@ class TestMemoryStore:
         assert "## 关于用户" in snapshot
         # memory 在 user 前面，中间有换行分隔
         assert snapshot.index("## 记忆") < snapshot.index("## 关于用户")
+
+    def test_get_all(self, store):
+        """get_all 返回原始快照 dict，含 memory 和 user 分类。"""
+        store.add("记忆A", category="memory")
+        store.add("用户偏好", category="user")
+        data = store.get_all()
+        assert data["memory"] == "记忆A"
+        assert data["user"] == "用户偏好"
+
+    def test_get_all_empty(self, store):
+        """空 store 的 get_all 返回空字符串。"""
+        data = store.get_all()
+        assert data == {"memory": "", "user": ""}
