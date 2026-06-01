@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--debug-context", action="store_true", help="将每轮 LLM 请求/响应写入 log/debug/session.json")
     parser.add_argument("--toolset", default="core", help="使用的工具集，默认 core")
+    parser.add_argument("--no-memory", action="store_true", help="禁用记忆系统")
     args = parser.parse_args()
 
     if args.version:
@@ -44,12 +45,15 @@ def main():
     agent.registry = registry
     agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
 
-    # 记忆系统 wiring（同步注入到 agent 和 memory 工具模块）
-    import tool.builtins.memory as memory_tool
+    if not args.no_memory:
+        import tool.builtins.memory as memory_tool
 
-    memory_store = MemoryStore(memory_dir=".memory")
-    agent.memory = memory_store
-    memory_tool._store = memory_store
+        # 合并 memory 工具集，默认启用记忆
+        agent.tool_names |= resolve_toolset("memory") & registry.tool_names
+
+        memory_store = MemoryStore(memory_dir=".memory")
+        agent.memory = memory_store
+        memory_tool._store = memory_store
 
     if args.message:
         reply = agent.run_conversation(args.message)
