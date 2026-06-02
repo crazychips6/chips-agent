@@ -62,6 +62,13 @@ def main():
         agent.memory = memory_store
         memory_tool._store = memory_store
 
+    # ── 环境层初始化 ──
+    from environment.local import LocalEnvironment
+    import tool.builtins.terminal as terminal_tool
+
+    env = LocalEnvironment(interactive=True)
+    terminal_tool._environment = env
+
     if args.message:
         reply = agent.run_conversation(args.message)
         print(reply)
