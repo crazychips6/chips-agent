@@ -16,6 +16,7 @@ def _sanitize(text: str) -> str:
 
 from agent.prompt import PromptBuilder
 from memory.store import MemoryStore
+from session.db import SessionDB
 from tool.registry import ToolRegistry
 
 _DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "log", "debug", "session.json")
@@ -43,6 +44,10 @@ class AIAgent:
         self.context_files: list[tuple[str, str, str]] = []
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
         self.messages: list[dict] = []
+        # session 持久化，由 cli.py wiring 注入
+        self.session_db: SessionDB | None = None
+        self.session_id: str = ""
+        self._saved_count: int = 0
 
     def _build_assistant_msg(self, msg) -> dict:
         """将 API 返回的 assistant 消息转为可追加到 self.messages 的 dict。
@@ -87,6 +92,9 @@ class AIAgent:
             with open(_DEBUG_LOG, "w") as f:
                 json.dump([], f)
 
+        # 保存 user message
+        self._save_pending()
+
         rounds = [] if self.debug_context else None
 
         # ReAct 循环：工具调用 → 结果回填 → 继续，直到 LLM 返回纯文本回复
@@ -124,10 +132,23 @@ class AIAgent:
                         "tool_call_id": tc.id,
                         "content": result,
                     })
+                self._save_pending()
             else:
                 content = msg.content or ""
                 self.messages.append(self._build_assistant_msg(msg))
+                self._save_pending()
                 return content
 
         # 达到最大迭代次数说明 LLM 可能陷入了工具调用死循环
+        self._save_pending()
         return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。"
+
+    def _save_pending(self):
+        """将尚未持久化的消息写入 session 数据库。"""
+        if not self.session_db or not self.session_id:
+            return
+        pending = self.messages[self._saved_count:]
+        if not pending:
+            return
+        self.session_db.save_messages(self.session_id, pending)
+        self._saved_count = len(self.messages)

@@ -6,8 +6,10 @@ import os
 from dotenv import load_dotenv
 
 from agent.loop import AIAgent
+from agent.logger import setup_logging, get_logger
 from agent.prompt import search_context_files
 from memory.store import MemoryStore
+from session.db import SessionDB
 from tool.registry import registry
 from tool.toolsets import resolve_toolset
 
@@ -30,6 +32,8 @@ def main():
     parser.add_argument("--toolset", default="core", help="使用的工具集，默认 core")
     parser.add_argument("--no-memory", action="store_true", help="禁用记忆系统")
     parser.add_argument("--verbose", action="store_true", help="显示 system prompt 各层详情")
+    parser.add_argument("--resume", nargs="?", const=True, default=False,
+                        help="恢复上次会话，或指定 session_id 恢复特定会话")
     args = parser.parse_args()
 
     if args.version:
@@ -68,6 +72,30 @@ def main():
 
     env = LocalEnvironment(interactive=True)
     terminal_tool._environment = env
+
+    # ── Session 持久化 ──
+    session_db = SessionDB(db_path=".chips/sessions.db")
+    agent.session_db = session_db
+
+    if args.resume:
+        session_id = args.resume if isinstance(args.resume, str) else None
+        if not session_id:
+            sessions = session_db.list_sessions(limit=1)
+            if sessions:
+                session_id = sessions[0]["id"]
+        if session_id:
+            sess = session_db.get_session(session_id)
+            if sess:
+                agent.session_id = session_id
+                agent.messages = session_db.get_history(session_id)
+                agent._saved_count = len(agent.messages)
+                print(f"已恢复会话 {session_id}（{len(agent.messages)} 条消息）")
+    if not agent.session_id:
+        agent.session_id = session_db.create_session()
+
+    # ── 日志初始化 ──
+    setup_logging(session_id=agent.session_id)
+    get_logger().info("session started")
 
     if args.message:
         reply = agent.run_conversation(args.message)
