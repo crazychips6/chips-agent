@@ -59,7 +59,7 @@ def main():
     args = parser.parse_args()
 
     if args.version:
-        print("chips 0.1.0")
+        print("chips 0.2.0")
         return
 
     api_key = os.getenv("DEEPSEEK_API_KEY")
