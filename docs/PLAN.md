@@ -1,14 +1,10 @@
 # chips-agent 实施计划
 
-## Context
+## 项目概述
 
 基于 Hermes 核心架构蒸馏，构建一个名为 "chips" 的通用类 agent（含 harness）。
-项目当前处于零代码阶段，仅有架构参考文档。
-要求按照**最小化逐渐拓展**的方式实现，各模块之间**强解耦**。
 
-## 解耦设计
-
-### 依赖方向（自底向上）
+### 解耦设计
 
 ```
 tool/  safety/  session/  memory/         ← 零内部依赖，最底层
@@ -17,8 +13,6 @@ environment/                                ← 仅依赖 safety（凭证剥离�
     ↕        ↕
 agent/                                      ← 依赖以上全部，但仅依赖接口
 ```
-
-### 解耦原则
 
 | 原则 | 说明 |
 |------|------|
@@ -56,6 +50,78 @@ PromptBuilder (agent/prompt.py)
 
 ---
 
+## 已完成 (Phase 0–9)
+
+| 阶段 | 内容 | 代码量 |
+|------|------|--------|
+| 0 | 项目脚手架：uv 骨架、目录结构、CLI 入口 | ~50 行 |
+| 1 | 最小 ReAct 循环：LLM 调用链路、7 层 system prompt | ~200 行 |
+| 2 | ToolRegistry：注册/派发/check_fn、echo 工具 | ~300 行 |
+| 3 | TOOLSETS：工具集分组、递归展开 | ~150 行 |
+| 4 | Memory：冻结快照、原子写、记忆工具 | ~250 行 |
+| 5 | System Prompt 7 层完整组装、context 文件搜索、注入检测 | ~250 行 |
+| 6 | 安全审批：hardline/dangerous 分层、交互审批、凭证剥离、terminal 工具 | ~400 行 |
+| 7 | Session 持久化：SQLite+WAL+FTS5、旋转日志、resume | ~400 行 |
+| 8 | 沙盒环境：Environment Protocol、LocalEnvironment | ~100 行（实际在阶段 6 完成） |
+| 9 | 扩展打磨：file_read/write、上下文压缩、测试覆盖补全、config.yaml 加载 | ~300 行 |
+
+**全量测试**: 185 条，当前全部通过。版本号: `v0.2.0`。
+
+---
+
+## 进行中: Phase 10 — 脱离 Toy 阶段
+
+**目标**: 解决最影响可用性的短板，使 chips 达到"可日常使用"级别。
+
+详细计划: [PHASE-10-TOWARD-PRODUCTION.md](./PHASE-10-TOWARD-PRODUCTION.md)
+
+### 子阶段
+
+| 编号 | 名称 | 优先级 | 状态 |
+|------|------|--------|------|
+| A1 | LLM 调用链路容错 (retry/streaming/迭代处理) | ⭐最高 | **进行中** |
+| A2 | 上下文压缩保护 | ⭐最高 | 待开始 |
+| B1 | 子进程生命周期管理 | ⭐高 | 待开始 |
+| B2 | DockerEnvironment | ⭐高 | 待开始 |
+| C | 路径安全重写 | ⭐高 | 待开始 |
+| D1 | 持久化审批白名单 | 中 | 待开始 |
+| D2 | 审计日志 | 中 | 待开始 |
+| E1 | 文件操作增强 (patch/grep/行范围) | 中 | 待开始 |
+| E2 | Web 工具 | 中 | 待开始 |
+| F1 | 记忆层级扩展 (working/episodic/semantic) | 中 | 待开始 |
+| G1 | Rich REPL | 低 | 待开始 |
+| G2 | Session 管理命令 | 低 | 待开始 |
+| G3 | 配置系统 (`chips config`) | 低 | 待开始 |
+| H1 | 图像理解支持 | 低 | 待开始 |
+
+### 当前子任务: A1
+
+1. **A1-1**: `agent/retry.py` — jittered backoff 工具函数
+2. **A1-2**: LLM 调用容错封装 — 429/超时重试，400/其他分类处理
+3. **A1-3**: Streaming 支持
+4. **A1-4**: 优雅迭代上限处理（死循环检测+降级回复）
+
+---
+
+## 未来: Phase 11 — 平台化与生态扩展
+
+**前提**: Phase 10 完成后启动。
+
+目标: 从终端 REPL → 多平台消息代理、从单 agent → 多 agent 协作、从手动 → 自动化调度。
+
+详细计划: [PHASE-11-PLATFORM.md](./PHASE-11-PLATFORM.md)
+
+| 编号 | 名称 | 说明 |
+|------|------|------|
+| I | Gateway | 多平台消息投递 (Slack/Discord/飞书) |
+| J | 插件系统 | Plugin Protocol + 生命周期挂钩 |
+| K | ACP | Agent 通信协议 + delegate 工具 |
+| L | 技能与知识生态 | Skills Hub + 向量记忆 RAG |
+| M | 自动化调度 | Cron + Webhook |
+| N | 多模态扩展 | 语音 + 浏览器 |
+
+---
+
 ## 项目结构
 
 ```
@@ -63,167 +129,28 @@ chips-agent/
 ├── pyproject.toml
 ├── CLAUDE.md
 ├── docs/
+│   ├── PLAN.md                        # ← 主计划（本文）
+│   ├── PHASE-10-TOWARD-PRODUCTION.md  # Phase 10 详细计划
+│   ├── PHASE-11-PLATFORM.md           # Phase 11 详细计划
+│   ├── core-reference.md              # Hermes 架构参考
+│   ├── coding-path.md                 # 多模块开发工作流
+│   ├── bad-case-surrogate-crash.md    # Bug 案例
 │   ├── CLAUDE.md
-│   ├── core-reference.md
-│   └── PLAN.md
-├── log/
-│   └── coding_log/           # 每次 coding 的记录
+│   └── learning/                      # 按阶段的学习笔记
 │
-├── agent/                    # ★ Agent 核心 — 依赖其他模块的接口
-│   ├── __init__.py
-│   ├── cli.py                # CLI 入口（组合根）
-│   ├── loop.py               # AIAgent（ReAct 循环）
-│   └── prompt.py             # PromptBuilder（7 层组装）
-│
-├── tool/                     # ★ 工具系统 — 零依赖
-│   ├── __init__.py
-│   ├── registry.py           # ToolRegistry 单例 + ToolEntry
-│   ├── toolsets.py           # TOOLSETS 静态定义 + resolve_toolset()
-│   └── builtins/             # 内置工具实现
-│       ├── __init__.py
-│       ├── echo.py           # 首个验证工具
-│       └── memory.py         # 记忆工具
-│
-├── safety/                   # ★ 安全层 — 零依赖
-│   ├── __init__.py
-│   ├── approval.py           # 危险命令审批
-│   └── sanitize.py           # 凭证剥离 + 日志脱敏
-│
-├── environment/              # ★ 沙盒环境 — 仅依赖 safety
-│   ├── __init__.py
-│   ├── base.py               # Environment Protocol（ABC）
-│   └── local.py              # LocalEnvironment（子进程隔离）
-│
-├── session/                  # ★ 会话持久化 — 零依赖
-│   ├── __init__.py
-│   └── db.py                 # SessionDB（SQLite + WAL + FTS5）
-│
-├── memory/                   # ★ 记忆系统 — 零依赖
-│   ├── __init__.py
-│   └── store.py              # MemoryStore（冻结快照 + 原子写）
-│
-└── test/
-    ├── __init__.py
-    └── test_*.py
+├── agent/         # 核心：CLI + ReAct 循环 + Prompt 组装
+├── tool/          # 工具系统：registry + toolsets + builtins
+├── safety/        # 安全层：审批 + 凭证剥离
+├── environment/   # 沙盒：Environment 协议 + LocalEnvironment
+├── session/       # 持久化：SQLite + FTS5
+├── memory/        # 记忆：快照 + 原子写
+└── test/          # 测试：模块对应 test_*.py
 ```
-
----
-
-## 分阶段实施
-
-### 阶段 0：项目脚手架 ✅
-
-**目标**：搭起 uv 项目骨架，验证 package 可导入、chips 命令可用。
-
-- 创建 `pyproject.toml`（flat layout，依赖 `anthropic`）
-- 创建所有模块目录：`agent/`, `tool/`, `safety/`, `environment/`, `session/`, `memory/`, `test/`
-- 创建最小 `agent/cli.py`：`argparse` + `--help`
-- 创建 `log/coding_log/`
-- 验证：`uv run chips --help` 和 `uv run chips --version`
-
-### 阶段 1：最小 ReAct 循环
-
-**目标**：一条 LLM 调用链路。无工具、无记忆、无安全。
-
-- `agent/cli.py`：argparse 解析 `--model`，交互式 `input()` 循环
-- `agent/loop.py`：`AIAgent.__init__(api_key, model)` + `run_conversation(text) → str`
-- `agent/prompt.py`：`PromptBuilder.build()` 返回默认系统身份
-- 配置自动加载 `~/.chips/config.yaml`
-- **验证**：`uv run chips` → 输入"你好" → LLM 回复
-
-### 阶段 2：ToolRegistry + 工具派发
-
-**目标**：工具注册、ReAct 循环中派发 tool_calls。
-
-- `tool/registry.py`：
-  - `register()` / `dispatch()` / `get_definitions()`
-  - check_fn TTL 缓存 30s，线程安全（RLock + generation counter）
-- `tool/builtins/echo.py`：模块级 `registry.register()`
-- `agent/loop.py`：集成 tool_calls → `registry.dispatch()` → 继续循环
-- **解耦点**：agent 不直接 import 任何工具，只通过 `dispatch()` 调用
-- **验证**：输入 "echo hello" → agent 调用 echo 工具 → 返回 "hello"
-
-### 阶段 3：TOOLSETS 工具选择层
-
-**目标**：按工具集分组，CLI 可选择启用哪些。
-
-- `tool/toolsets.py`：`TOOLSETS` + `resolve_toolset()` 递归展开
-- `agent/cli.py`：新增 `--toolset` 参数（默认 `core`）
-- **验证**：`uv run chips --toolset core` 只加载 core 工具集
-
-### 阶段 4：Memory 冻结快照
-
-**目标**：agent 可读写持久化记忆。
-
-- `memory/store.py`：`MemoryStore` 双文件（MEMORY.md + USER.md）、原子写、冻结快照
-- `tool/builtins/memory.py`：记忆读写工具
-- `agent/prompt.py`：注入记忆快照
-- **验证**：记忆 → 重启 → 回忆
-
-### 阶段 5：System Prompt 完整组装
-
-**目标**：7 层 system prompt，上下文文件加载和注入检测。
-
-- `agent/prompt.py`：7 层独立方法、context 文件搜索链、injection 检测、head/tail 截断
-- **验证**：`--verbose` 观察 7 层内容
-
-### 阶段 6：安全审批
-
-**目标**：危险命令检测 + 交互审批 + 凭证剥离。
-
-- `safety/approval.py`：HARDLINE_PATTERNS + DANGEROUS_PATTERNS + 交互审批
-- `safety/sanitize.py`：EnvBlocklist + RedactingFormatter
-- **验证**：模拟危险命令触发审批
-
-### 阶段 7：Session 持久化 + 日志
-
-**目标**：对话历史自动持久化，结构化日志。
-
-- `session/db.py`：SQLite WAL + FTS5
-- 日志系统：旋转日志 + Session 标记 + 脱敏
-- **验证**：`--resume` 恢复历史
-
-### 阶段 8：沙盒环境
-
-**目标**：安全执行终端命令。
-
-- `environment/base.py`：Environment Protocol
-- `environment/local.py`：子进程隔离 + 凭证剥离
-- `tool/builtins/terminal.py`：terminal 工具
-- **验证**：`ls -la` 返回目录列表
-
-### 阶段 9：扩展 + 打磨
-
-- 更多内置工具、DockerEnvironment、Context 压缩、测试覆盖
-
----
-
-## 进度跟踪
-
-| 阶段 | 状态 | 完成日期 |
-|------|------|---------|
-| 0—项目脚手架 | ✅ | 2026-05-28 |
-| 1—最小 ReAct | ✅ | 2026-05-28 |
-| 2—ToolRegistry | ✅ | 2026-05-28 |
-| 3—TOOLSETS | ✅ | 2026-05-30 |
-| 4—Memory | ✅ | 2026-05-31 |
-| 5—System Prompt | ✅ | 2026-06-01 |
-| 6—安全审批 | ✅ | 2026-06-02 |
-| 7—Session+日志 | ✅ | 2026-06-02 |
-| 8—沙盒环境 | ✅ | 2026-06-02 |
-| 9—扩展打磨 | ✅ | 2026-06-03 |
 
 ## 验证方法
 
 | 阶段 | 验证 | 预期 |
 |------|------|------|
-| 0 | `uv run chips --version` | 输出版本 |
-| 1 | `uv run chips` → 输入"你好" | LLM 回复 |
-| 2 | 输入"echo hello" | 工具调用成功 |
-| 3 | `--toolset core` | 仅加载 core |
-| 4 | 记忆→重启→回忆 | 持久化生效 |
-| 5 | `--verbose` 观察 system prompt | 7 层完整 |
-| 6 | 模拟危险命令 | 触发审批提示 |
-| 7 | `--resume` | 恢复历史 |
-| 8 | 终端命令 | 子进程执行 |
-| 9 | `uv run pytest` | 全部通过 |
+| 已完成 | `uv run pytest` | 185 条全部通过 |
+| Phase 10 | 各子阶段新增测试 | 测试通过且新功能可手动验证 |
+| Phase 11 | 同上 | 同上 |

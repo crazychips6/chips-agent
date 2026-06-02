@@ -2,5 +2,13 @@
 .venv/
 __pycache__/
 *.pyc
-log/debug/
+
+# 运行时数据
+.chips/
 .memory/
+log/*.log
+log/debug/
+log/llm_*.md
+
+# 构建产物
+*.egg-info/

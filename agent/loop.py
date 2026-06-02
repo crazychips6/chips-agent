@@ -3,7 +3,12 @@
 import json
 import os
 import re
+import sys
+import time
+from collections import defaultdict
+from types import SimpleNamespace
 
+import openai
 from openai import OpenAI
 
 # 移除 surrogate 字符（如 DeepSeek reasoning_content 中可能出现的 \udce4），
@@ -15,11 +20,15 @@ def _sanitize(text: str) -> str:
     return _SURROGATE_RE.sub("", text)
 
 from agent.prompt import PromptBuilder
+from agent.retry import jittered_backoff
 from memory.store import MemoryStore
 from session.db import SessionDB
 from tool.registry import ToolRegistry
 
 _DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "log", "debug", "session.json")
+
+# 同一工具+同参数签名重复 N 次视为死循环
+_MAX_TOOL_LOOP = 4
 
 
 class AIAgent:
@@ -30,11 +39,15 @@ class AIAgent:
         model: str = "deepseek-chat",
         debug_context: bool = False,
         verbose: bool = False,
+        stream: bool = False,
+        max_retries: int = 3,
     ):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.debug_context = debug_context
         self.verbose = verbose
+        self.stream = stream
+        self._max_retries = max_retries
         self.prompt_builder = PromptBuilder(verbose=verbose)
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
@@ -51,14 +64,123 @@ class AIAgent:
         # 上下文压缩：消息总字符超限时裁剪历史
         self.max_context_chars: int = 100_000
 
-    def _build_assistant_msg(self, msg) -> dict:
-        """将 API 返回的 assistant 消息转为可追加到 self.messages 的 dict。
+    # ── LLM 调用（带重试） ──
 
-        单独抽离的原因：DeepSeek 的 reasoning_content 字段必须保留并在后续请求中
-        原样回传，否则思考链会断裂。OpenAI SDK 的 msg 对象是只读的，需要转成普通 dict。
-        """
+    def _call_with_retry(self, fn, desc="LLM 调用") -> any:
+        """调用 fn，遇可重试异常时退避重试。"""
+        last_error = None
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                return fn()
+            except openai.BadRequestError as e:
+                raise RuntimeError(f"请求参数错误（不重试）：{e}")
+            except openai.RateLimitError:
+                last_error = "API 速率限制"
+                if attempt < self._max_retries:
+                    delay = jittered_backoff(attempt)
+                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
+                    time.sleep(delay)
+            except openai.APIStatusError as e:
+                if e.status_code in (502, 503, 504):
+                    last_error = f"服务暂时不可用 ({e.status_code})"
+                    if attempt < self._max_retries:
+                        delay = jittered_backoff(attempt, base_delay=2.0)
+                        print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
+                        time.sleep(delay)
+                else:
+                    raise RuntimeError(f"API 错误 (HTTP {e.status_code}，不重试)：{e}")
+            except openai.APITimeoutError:
+                last_error = "请求超时"
+                if attempt < self._max_retries:
+                    delay = jittered_backoff(attempt, base_delay=2.0)
+                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
+                    time.sleep(delay)
+            except openai.APIConnectionError:
+                last_error = "网络连接异常"
+                if attempt < self._max_retries:
+                    delay = jittered_backoff(attempt, base_delay=2.0)
+                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
+                    time.sleep(delay)
+            except openai.BadRequestError as e:
+                raise RuntimeError(f"请求参数错误（不重试）：{e}")
+            except Exception as e:
+                last_error = f"未知错误：{e}"
+                if attempt < self._max_retries:
+                    delay = jittered_backoff(attempt, base_delay=1.0)
+                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
+                    time.sleep(delay)
+        raise RuntimeError(f"{desc}失败（已重试 {self._max_retries} 次）：{last_error}")
+
+    def _call_llm(self, kwargs) -> any:
+        """非流式调用，带自动重试。"""
+        def _do_call():
+            response = self.client.chat.completions.create(**kwargs)
+            return response.choices[0].message
+        return self._call_with_retry(_do_call)
+
+    def _call_llm_streaming(self, kwargs) -> any:
+        """流式调用，逐 chunk 输出，带自动重试。"""
+        stream_kwargs = {**kwargs, "stream": True, "stream_options": {"include_usage": True}}
+
+        def _do_stream():
+            stream = self.client.chat.completions.create(**stream_kwargs)
+            content = ""
+            tool_calls: dict[int, dict] = {}
+
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if not delta:
+                    continue
+
+                if delta.content:
+                    print(delta.content, end="", flush=True)
+                    content += delta.content
+
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls:
+                            tool_calls[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                        if tc.id:
+                            tool_calls[idx]["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                tool_calls[idx]["function"]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+
+            msg = SimpleNamespace()
+            msg.content = content
+            msg.reasoning_content = None
+
+            if tool_calls:
+                calls = []
+                for i in sorted(tool_calls.keys()):
+                    tc = tool_calls[i]
+                    func = SimpleNamespace()
+                    func.name = tc["function"]["name"]
+                    func.arguments = tc["function"]["arguments"]
+                    call = SimpleNamespace()
+                    call.id = tc["id"]
+                    call.type = "function"
+                    call.function = func
+                    calls.append(call)
+                msg.tool_calls = calls
+            else:
+                msg.tool_calls = None
+                print()  # 纯文本回复结束后换行
+
+            return msg
+
+        return self._call_with_retry(_do_stream, desc="流式 LLM 调用")
+
+    # ── 消息构建 ──
+
+    def _build_assistant_msg(self, msg) -> dict:
+        """将 API 返回的 assistant 消息转为可追加到 self.messages 的 dict。"""
         d = {"role": "assistant", "content": _sanitize(msg.content or "")}
-        # DeepSeek 专有字段：非流式模式下通过 reasoning_content 返回思考链
         rc = getattr(msg, "reasoning_content", None)
         if rc:
             d["reasoning_content"] = _sanitize(rc)
@@ -76,8 +198,18 @@ class AIAgent:
             ]
         return d
 
+    def _detect_tool_loop(self, tool_name: str, args_str: str) -> bool:
+        """检测同一工具+同一参数是否被重复调用（死循环）。"""
+        if not hasattr(self, "_tool_call_history"):
+            self._tool_call_history = defaultdict(int)
+        key = f"{tool_name}:{args_str}"
+        self._tool_call_history[key] += 1
+        return self._tool_call_history[key] >= _MAX_TOOL_LOOP
+
+    # ── 主循环 ──
+
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
-        # system prompt 每次重新构建，以便后续阶段支持动态上下文层
+        # system prompt 每次重新构建
         memory_data = self.memory.get_all() if self.memory else {}
         tool_defs = self.registry.get_definitions(self.tool_names) if self.registry else []
         system = self.prompt_builder.build(
@@ -88,19 +220,22 @@ class AIAgent:
         )
         self.messages.append({"role": "user", "content": _sanitize(user_message)})
 
-        # 每次 session 开始时创建目录并写空数组，清空上次内容
+        # 重置工具循环检测
+        self._tool_call_history = defaultdict(int)
+
+        # debug_context 日志
         if self.debug_context:
             os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
             with open(_DEBUG_LOG, "w") as f:
                 json.dump([], f)
 
-        # 保存 user message
         self._save_pending()
 
         rounds = [] if self.debug_context else None
+        last_text_reply = None
 
-        # ReAct 循环：工具调用 → 结果回填 → 继续，直到 LLM 返回纯文本回复
-        for _ in range(max_iterations):
+        # ReAct 循环
+        for iteration in range(max_iterations):
             self._maybe_trim_context()
 
             kwargs = {
@@ -114,8 +249,8 @@ class AIAgent:
                 if tools:
                     kwargs["tools"] = tools
 
-            response = self.client.chat.completions.create(**kwargs)
-            msg = response.choices[0].message
+            # LLM 调用（统一入口，内部处理 retry/streaming）
+            msg = self._call_llm_streaming(kwargs) if self.stream else self._call_llm(kwargs)
 
             if self.debug_context:
                 rounds.append({"request": kwargs, "response": {"content": msg.content, "reasoning_content": getattr(msg, "reasoning_content", None), "tool_calls": [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in (msg.tool_calls or [])]}})
@@ -123,13 +258,25 @@ class AIAgent:
                     json.dump(rounds, f, ensure_ascii=False, indent=2)
 
             if msg.tool_calls:
-                # 先追加 assistant 消息（含 tool_calls），再逐个派发并将结果追加为 tool 消息
                 self.messages.append(self._build_assistant_msg(msg))
                 for tc in msg.tool_calls:
                     try:
                         args = json.loads(tc.function.arguments)
                     except json.JSONDecodeError:
                         args = {}
+                    args_str = json.dumps(args, sort_keys=True) if args else "{}"
+
+                    # 死循环检测
+                    if self._detect_tool_loop(tc.function.name, args_str):
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": f"错误：工具 {tc.function.name} 已被连续调用 {_MAX_TOOL_LOOP} 次，疑似死循环。请换一种方式解决问题。",
+                        })
+                        self._save_pending()
+                        # 继续循环让 LLM 有机会看到错误信息并调整策略
+                        continue
+
                     result = self.registry.dispatch(tc.function.name, args)
                     self.messages.append({
                         "role": "tool",
@@ -141,11 +288,18 @@ class AIAgent:
                 content = msg.content or ""
                 self.messages.append(self._build_assistant_msg(msg))
                 self._save_pending()
-                return content
+                last_text_reply = content
+                if content:
+                    if self.stream:
+                        return ""  # 已由 _call_llm_streaming 实时输出
+                    return content
+                return ""
 
-        # 达到最大迭代次数说明 LLM 可能陷入了工具调用死循环
+        # 达到最大迭代次数
         self._save_pending()
-        return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。"
+        if last_text_reply:
+            return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
+        return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
 
     def _save_pending(self):
         """将尚未持久化的消息写入 session 数据库。"""

@@ -56,6 +56,7 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="显示 system prompt 各层详情")
     parser.add_argument("--resume", nargs="?", const=True, default=False,
                         help="恢复上次会话，或指定 session_id 恢复特定会话")
+    parser.add_argument("--no-stream", action="store_true", help="禁用 streaming 输出")
     args = parser.parse_args()
 
     if args.version:
@@ -68,7 +69,7 @@ def main():
         print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
         return
 
-    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context, verbose=args.verbose)
+    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
@@ -121,7 +122,8 @@ def main():
 
     if args.message:
         reply = agent.run_conversation(args.message)
-        print(reply)
+        if reply:
+            print(reply)
         return
 
     memory_snapshot = agent.memory.for_system_prompt() if agent.memory else ""
@@ -148,7 +150,8 @@ def main():
             continue
 
         reply = agent.run_conversation(text)
-        print(reply)
+        if reply:
+            print(reply)
 
 
 if __name__ == "__main__":

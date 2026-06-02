@@ -2,9 +2,25 @@
 
 from unittest.mock import MagicMock, patch
 
+import openai
 import pytest
 
 from agent.loop import AIAgent
+
+
+@pytest.fixture
+def mock_openai():
+    with patch("agent.loop.OpenAI") as mock:
+        client = MagicMock()
+        mock.return_value = client
+        yield client
+
+
+@pytest.fixture
+def mock_openai_raw():
+    """mock 整个 openai 模块，包括异常类。"""
+    with patch("agent.loop.openai") as mock:
+        yield mock
 
 
 @pytest.fixture
@@ -205,3 +221,198 @@ class TestConstructor:
         agent = AIAgent(api_key="test-key")
         assert agent.verbose is False
         assert agent.prompt_builder.verbose is False
+
+    def test_stream_default_off(self):
+        agent = AIAgent(api_key="test-key")
+        assert agent.stream is False
+
+    def test_max_retries_default(self):
+        agent = AIAgent(api_key="test-key")
+        assert agent._max_retries == 3
+
+
+class TestCallWithRetry:
+    def test_normal_call_succeeds(self):
+        agent = AIAgent(api_key="test-key")
+        result = agent._call_with_retry(lambda: "ok", desc="test")
+        assert result == "ok"
+
+    def test_rate_limit_retry_then_succeed(self, mock_openai):
+        """模拟 RateLimitError 一次后重试成功。"""
+        agent = AIAgent(api_key="test-key", max_retries=2)
+        calls = []
+
+        def _fn():
+            calls.append(1)
+            if len(calls) == 1:
+                raise openai.RateLimitError("rate limited", response=MagicMock(), body=None)
+            return "ok after retry"
+
+        result = agent._call_with_retry(_fn, desc="test")
+        assert result == "ok after retry"
+        assert len(calls) == 2
+
+    def test_bad_request_not_retried(self):
+        """400 错误不重试，直接抛。"""
+        agent = AIAgent(api_key="test-key")
+        with pytest.raises(RuntimeError, match="请求参数错误"):
+            agent._call_with_retry(
+                lambda: (_ for _ in ()).throw(openai.BadRequestError("bad req", response=MagicMock(), body=None)),
+                desc="test",
+            )
+
+    def test_exhaust_retries(self):
+        """连续失败达到最大重试次数后抛异常。"""
+        agent = AIAgent(api_key="test-key", max_retries=2)
+        with pytest.raises(RuntimeError, match="失败"):
+            agent._call_with_retry(
+                lambda: (_ for _ in ()).throw(openai.RateLimitError("always fail", response=MagicMock(), body=None)),
+                desc="test",
+            )
+
+
+class TestToolLoopDetection:
+    def test_under_threshold(self):
+        agent = AIAgent(api_key="test-key")
+        assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
+        assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
+        assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
+
+    def test_detects_loop(self):
+        agent = AIAgent(api_key="test-key")
+        agent._detect_tool_loop("echo", '{"text":"hi"}')
+        agent._detect_tool_loop("echo", '{"text":"hi"}')
+        agent._detect_tool_loop("echo", '{"text":"hi"}')
+        assert agent._detect_tool_loop("echo", '{"text":"hi"}') is True
+
+    def test_different_args_not_loop(self):
+        agent = AIAgent(api_key="test-key")
+        for i in range(5):
+            assert agent._detect_tool_loop("echo", f'{{"text":"bye_{i}"}}') is False
+
+    def test_reset_on_new_conversation(self, mock_openai):
+        """新对话重置循环计数器。"""
+        msg = MagicMock()
+        msg.content = "ok"
+        msg.reasoning_content = None
+        msg.tool_calls = None
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=msg)]
+        )
+
+        agent = AIAgent(api_key="test-key")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        agent.run_conversation("hi")
+        # 上一轮如果有工具循环，新对话不应继承
+        assert len(agent._tool_call_history) == 0
+
+
+class TestMaxIterationsWithText:
+    def test_returns_generic_message_on_exhaustion(self, mock_openai):
+        """只有 tool_call 时达到上限返回通用提示。"""
+        tc = MagicMock()
+        tc.id = "c1"
+        tc.type = "function"
+        tc.function.name = "echo"
+        tc.function.arguments = '{"text":"x"}'
+
+        msg = MagicMock()
+        msg.content = None
+        msg.reasoning_content = None
+        msg.tool_calls = [tc]
+
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=msg)]
+        )
+
+        agent = AIAgent(api_key="test-key")
+        agent.registry = MagicMock()
+        agent.registry.dispatch.return_value = "done"
+        agent.registry.get_definitions.return_value = [{"function": {"name": "echo"}}]
+        agent.tool_names = {"echo"}
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        reply = agent.run_conversation("start", max_iterations=3)
+        assert "最大迭代次数" in reply
+        assert "简化请求" in reply
+
+
+class TestStreaming:
+    def test_stream_accumulates_content(self, mock_openai):
+        """流式调用正确累积分块内容。"""
+        # 构造流式 chunk
+        chunks = []
+        for text in ["Hello", " ", "World", "!"]:
+            chunk = MagicMock()
+            choice = MagicMock()
+            delta = MagicMock()
+            delta.content = text
+            delta.tool_calls = None
+            choice.delta = delta
+            choice.finish_reason = None
+            chunk.choices = [choice]
+            chunks.append(chunk)
+
+        # 最后一个 chunk finish_reason=stop
+        chunks[-1].choices[0].finish_reason = "stop"
+
+        mock_openai.chat.completions.create.return_value = chunks
+
+        agent = AIAgent(api_key="test-key", stream=True)
+        msg = agent._call_llm_streaming({"model": "test", "messages": [{"role": "user", "content": "hi"}]})
+
+        assert msg.content == "Hello World!"
+        assert msg.tool_calls is None
+
+    def test_stream_accumulates_tool_calls(self, mock_openai):
+        """流式调用正确累积分块的 tool_calls。"""
+        chunk1 = MagicMock()
+        c1 = MagicMock()
+        c1.delta.content = None
+        c1.delta.tool_calls = None
+        c1.finish_reason = None
+        chunk1.choices = [c1]
+
+        # tool_call 分块: 先发 id 和 name
+        chunk2 = MagicMock()
+        c2 = MagicMock()
+        c2.delta.content = None
+        tc2 = MagicMock()
+        tc2.index = 0
+        tc2.id = "call_1"
+        tc2.function.name = "echo"
+        tc2.function.arguments = ""
+        c2.delta.tool_calls = [tc2]
+        c2.finish_reason = None
+        chunk2.choices = [c2]
+
+        # tool_call 分块: 发 arguments
+        chunk3 = MagicMock()
+        c3 = MagicMock()
+        c3.delta.content = None
+        tc3 = MagicMock()
+        tc3.index = 0
+        tc3.id = ""
+        tc3.function.name = ""
+        tc3.function.arguments = '{"text":"hello"}'
+        c3.delta.tool_calls = [tc3]
+        c3.finish_reason = "tool_calls"
+        chunk3.choices = [c3]
+
+        mock_openai.chat.completions.create.return_value = [chunk1, chunk2, chunk3]
+
+        agent = AIAgent(api_key="test-key", stream=True)
+        msg = agent._call_llm_streaming({"model": "test", "messages": []})
+
+        assert msg.content == ""
+        assert msg.tool_calls is not None
+        assert len(msg.tool_calls) == 1
+        assert msg.tool_calls[0].id == "call_1"
+        assert msg.tool_calls[0].function.name == "echo"
+        assert msg.tool_calls[0].function.arguments == '{"text":"hello"}'
