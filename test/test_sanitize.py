@@ -4,8 +4,6 @@
 
 import logging
 
-import pytest
-
 from safety.sanitize import (
     strip_env,
     redact,

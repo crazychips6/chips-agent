@@ -2,12 +2,9 @@
 
 LocalEnvironment 执行 + 安全审批集成。"""
 
-from unittest.mock import patch
-
 import pytest
 
 from environment.local import LocalEnvironment
-from environment.base import ExecuteResult
 
 
 class TestLocalEnvironment:

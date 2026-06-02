@@ -8,7 +8,6 @@
 不依赖 agent/ 或 tool/ 模块。"""
 
 import subprocess
-import sys
 
 from safety.approval import check, ApprovalAction
 from safety.sanitize import strip_env

@@ -9,7 +9,7 @@ import pytest
 
 from agent.loop import AIAgent
 from memory.store import MemoryStore
-from tool.registry import ToolRegistry, registry as global_registry
+from tool.registry import ToolRegistry
 from tool.toolsets import resolve_toolset
 
 

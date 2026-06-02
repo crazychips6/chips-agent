@@ -5,7 +5,6 @@
 路径安全校验内联实现，不违反 tool/ 零依赖约束。"""
 
 import os
-import json
 
 from tool.registry import registry
 
@@ -40,11 +39,6 @@ _SENSITIVE_WRITE_PATHS: list[str] = [
     ".chips/",
     ".memory/",
 ]
-
-# .env 加不加都危险，放编译后的匹配
-_SENSITIVE_PARTS = [s for s in _SENSITIVE_FILE_PATTERNS]
-
-_wiring: dict = {"env": None}
 
 
 def _is_sensitive_path(abspath: str) -> str | None:

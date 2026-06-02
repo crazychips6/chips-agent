@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -16,9 +17,30 @@ from tool.toolsets import resolve_toolset
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
 
+_CONFIG_PATH = Path.home() / ".chips" / "config.yaml"
+
+
+def _load_config() -> dict:
+    """加载 ~/.chips/config.yaml，不存在时返回空字典。"""
+    if not _CONFIG_PATH.exists():
+        return {}
+    try:
+        import yaml
+        with open(_CONFIG_PATH) as f:
+            cfg: dict = yaml.safe_load(f) or {}
+        return cfg
+    except Exception:
+        return {}
+
 
 def main():
     load_dotenv()
+
+    # 加载 ~/.chips/config.yaml，仅当对应环境变量未设置时生效
+    cfg = _load_config()
+    for key, env_name in [("model", "CHIPS_MODEL"), ("base_url", "CHIPS_BASE_URL")]:
+        if key in cfg and not os.getenv(env_name):
+            os.environ[env_name] = str(cfg[key])
 
     parser = argparse.ArgumentParser(
         prog="chips6",

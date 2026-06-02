@@ -1,6 +1,5 @@
 """tool.toolsets 单元测试"""
 
-import pytest
 from tool.toolsets import TOOLSETS, resolve_toolset
 
 
