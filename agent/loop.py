@@ -48,6 +48,8 @@ class AIAgent:
         self.session_db: SessionDB | None = None
         self.session_id: str = ""
         self._saved_count: int = 0
+        # 上下文压缩：消息总字符超限时裁剪历史
+        self.max_context_chars: int = 100_000
 
     def _build_assistant_msg(self, msg) -> dict:
         """将 API 返回的 assistant 消息转为可追加到 self.messages 的 dict。
@@ -99,6 +101,8 @@ class AIAgent:
 
         # ReAct 循环：工具调用 → 结果回填 → 继续，直到 LLM 返回纯文本回复
         for _ in range(max_iterations):
+            self._maybe_trim_context()
+
             kwargs = {
                 "model": self.model,
                 "messages": [{"role": "system", "content": system}, *self.messages],
@@ -152,3 +156,13 @@ class AIAgent:
             return
         self.session_db.save_messages(self.session_id, pending)
         self._saved_count = len(self.messages)
+
+    def _maybe_trim_context(self):
+        """消息总字符超限时，裁剪最旧的 user+assistant 对。"""
+        total = sum(len(m.get("content", "")) for m in self.messages)
+        if total <= self.max_context_chars:
+            return
+        # 保留最近 2 条，从最旧开始逐对删除
+        while len(self.messages) > 2 and total > self.max_context_chars:
+            removed = self.messages.pop(0)
+            total -= len(removed.get("content", ""))

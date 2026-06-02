@@ -6,7 +6,7 @@ from tool.toolsets import TOOLSETS, resolve_toolset
 
 class TestResolveToolset:
     def test_core(self):
-        assert resolve_toolset("core") == {"echo", "terminal"}
+        assert resolve_toolset("core") == {"echo", "terminal", "file_read", "file_write"}
 
     def test_all(self):
         """all 是 meta 工具集，递归展开所有子集。"""
