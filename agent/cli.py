@@ -57,6 +57,10 @@ def main():
     parser.add_argument("--resume", nargs="?", const=True, default=False,
                         help="恢复上次会话，或指定 session_id 恢复特定会话")
     parser.add_argument("--no-stream", action="store_true", help="禁用 streaming 输出")
+    parser.add_argument("--env", default="local", choices=["local", "docker"],
+                        help="执行环境: local（本地）或 docker（容器沙盒）")
+    parser.add_argument("--docker-image", default="alpine:latest",
+                        help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
     args = parser.parse_args()
 
     if args.version:
@@ -89,12 +93,10 @@ def main():
         agent.memory = memory_store
         memory_tool._store = memory_store
 
-    # ── 环境层初始化 ──
-    from environment.local import LocalEnvironment
-    import tool.builtins.terminal as terminal_tool
-
-    env = LocalEnvironment(interactive=True)
-    terminal_tool._environment = env
+    # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
+    os.environ["CHIPS_ENV"] = args.env
+    if args.env == "docker":
+        os.environ["CHIPS_DOCKER_IMAGE"] = args.docker_image
 
     # ── Session 持久化 ──
     session_db = SessionDB(db_path=".chips/sessions.db")

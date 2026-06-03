@@ -82,7 +82,7 @@ PromptBuilder (agent/prompt.py)
 | A1 | LLM 调用链路容错 (retry/streaming/迭代处理) | ⭐最高 | ✅ **已完成** |
 | A2 | 上下文压缩保护 | ⭐最高 | ✅ **已完成** |
 | B1 | 子进程生命周期管理 | ⭐高 | ✅ **已完成** |
-| B2 | DockerEnvironment | ⭐高 | 待开始 |
+| B2 | DockerEnvironment | ⭐高 | ✅ **已完成** |
 | C | 路径安全重写 | ⭐高 | 待开始 |
 | D1 | 持久化审批白名单 | 中 | 待开始 |
 | D2 | 审计日志 | 中 | 待开始 |
@@ -94,7 +94,7 @@ PromptBuilder (agent/prompt.py)
 | G3 | 配置系统 (`chips config`) | 低 | 待开始 |
 | H1 | 图像理解支持 | 低 | 待开始 |
 
-### 当前子任务: B2
+### 当前子任务: C
 
 待开始
 
