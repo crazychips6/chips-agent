@@ -312,11 +312,50 @@ class AIAgent:
         self._saved_count = len(self.messages)
 
     def _maybe_trim_context(self):
-        """消息总字符超限时，裁剪最旧的 user+assistant 对。"""
-        total = sum(len(m.get("content", "")) for m in self.messages)
+        """消息超限时，先压缩 tool 结果，再从中间删除完整 assistant+tool 组。
+
+        保护首尾，不破坏 assistant/tool 配对。
+        """
+        total = self._total_chars()
         if total <= self.max_context_chars:
             return
-        # 保留最近 2 条，从最旧开始逐对删除
-        while len(self.messages) > 2 and total > self.max_context_chars:
-            removed = self.messages.pop(0)
-            total -= len(removed.get("content", ""))
+
+        # Phase 1: 压缩 tool 结果内容（非破坏性，保留结构完整）
+        TOOL_MAX_LEN = 2000
+        for m in self.messages:
+            if m.get("role") == "tool" and len(m.get("content", "")) > TOOL_MAX_LEN:
+                m["content"] = m["content"][:TOOL_MAX_LEN] + "\n...(truncated)"
+
+        if self._total_chars() <= self.max_context_chars:
+            return
+
+        # Phase 2: 从中间逐组删除（assistant+tool 为原子单位）
+        while self._total_chars() > self.max_context_chars:
+            if len(self.messages) <= 3:
+                break
+
+            # 构建原子组 —— assistant(with tool_calls) + 紧随 tool 消息为整体
+            groups: list[list[int]] = []
+            i = 0
+            while i < len(self.messages):
+                if self.messages[i].get("role") == "assistant" and self.messages[i].get("tool_calls"):
+                    group = [i]
+                    i += 1
+                    while i < len(self.messages) and self.messages[i].get("role") == "tool":
+                        group.append(i)
+                        i += 1
+                    groups.append(group)
+                else:
+                    groups.append([i])
+                    i += 1
+
+            if len(groups) <= 3:
+                break
+
+            # 删除第 1 组之后、最后 2 组之前的最旧中间组
+            target = groups[1]
+            for pos in sorted(target, reverse=True):
+                self.messages.pop(pos)
+
+    def _total_chars(self) -> int:
+        return sum(len(m.get("content") or "") for m in self.messages)

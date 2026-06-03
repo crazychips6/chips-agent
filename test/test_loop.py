@@ -416,3 +416,88 @@ class TestStreaming:
         assert msg.tool_calls[0].id == "call_1"
         assert msg.tool_calls[0].function.name == "echo"
         assert msg.tool_calls[0].function.arguments == '{"text":"hello"}'
+
+
+class TestTrimContext:
+    """_maybe_trim_context 的压缩保护和配对完整性。"""
+
+    def test_under_limit_no_trim(self):
+        """未超限时不删除任何消息。"""
+        agent = AIAgent(api_key="test-key", max_retries=1)
+        agent.max_context_chars = 1000
+        agent.messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+        expected = agent.messages[:]
+        agent._maybe_trim_context()
+        assert agent.messages == expected
+
+    def test_compress_long_tool(self):
+        """tool 结果超限时被截断，消息数量不变。"""
+        agent = AIAgent(api_key="test-key")
+        agent.max_context_chars = 100
+        long_content = "a" * 5000
+        agent.messages = [
+            {"role": "user", "content": "start"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": long_content},
+            {"role": "assistant", "content": "done"},
+        ]
+        agent._maybe_trim_context()
+        assert len(agent.messages) == 4
+        assert "..." in agent.messages[2]["content"]
+        assert len(agent.messages[2]["content"]) < len(long_content)
+
+    def test_remove_middle_group_keeps_first_and_last(self):
+        """超限时删除中间组，保护第 1 组和最后 2 组。"""
+        agent = AIAgent(api_key="test-key")
+        agent.max_context_chars = 200
+        # 5 个组：user + 3 轮 assistant+tool + 最终 assistant
+        agent.messages = [
+            {"role": "user", "content": "start"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "x" * 3000},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c2", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c2", "content": "y" * 3000},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c3", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c3", "content": "z" * 3000},
+            {"role": "assistant", "content": "final reply"},
+        ]
+        agent._maybe_trim_context()
+        assert agent.messages[0]["role"] == "user"
+        assert agent.messages[-1]["role"] == "assistant"
+        assert agent.messages[-1]["content"] == "final reply"
+        assert len(agent.messages) < 8
+        # 任何剩余的 assistant+tool_calls 都有对应的 tool 跟进
+        roles = [m["role"] for m in agent.messages]
+        for i, r in enumerate(roles):
+            if r == "assistant" and agent.messages[i].get("tool_calls"):
+                assert i + 1 < len(roles) and roles[i + 1] == "tool"
+
+    def test_few_messages_no_removal(self):
+        """消息数 ≤3 时只压缩，不删除。"""
+        agent = AIAgent(api_key="test-key")
+        agent.max_context_chars = 50
+        agent.messages = [
+            {"role": "user", "content": "start" + "x" * 100},
+            {"role": "assistant", "content": "hello" * 100},
+        ]
+        agent._maybe_trim_context()
+        assert len(agent.messages) == 2
+
+    def test_preserves_tool_pair_after_trim(self):
+        """删除后所有 assistant+tool_calls 都有对应的 tool 跟进。"""
+        agent = AIAgent(api_key="test-key")
+        agent.max_context_chars = 100
+        msgs = [{"role": "user", "content": "go"}]
+        for i in range(4):
+            msgs.append({"role": "assistant", "content": None, "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "x", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 3000})
+        msgs.append({"role": "assistant", "content": "over"})
+        agent.messages = msgs
+        agent._maybe_trim_context()
+        for i, m in enumerate(agent.messages):
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                assert i + 1 < len(agent.messages)
+                assert agent.messages[i + 1]["role"] == "tool"
+                tc_ids = {tc["id"] for tc in m["tool_calls"]}
+                tool_id = agent.messages[i + 1]["tool_call_id"]
+                assert tool_id in tc_ids, f"tool {tool_id} 没有匹配的 assistant tool_call"

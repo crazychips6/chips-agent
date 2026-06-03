@@ -79,8 +79,8 @@ PromptBuilder (agent/prompt.py)
 
 | 编号 | 名称 | 优先级 | 状态 |
 |------|------|--------|------|
-| A1 | LLM 调用链路容错 (retry/streaming/迭代处理) | ⭐最高 | **进行中** |
-| A2 | 上下文压缩保护 | ⭐最高 | 待开始 |
+| A1 | LLM 调用链路容错 (retry/streaming/迭代处理) | ⭐最高 | ✅ **已完成** |
+| A2 | 上下文压缩保护 | ⭐最高 | ✅ **已完成** |
 | B1 | 子进程生命周期管理 | ⭐高 | 待开始 |
 | B2 | DockerEnvironment | ⭐高 | 待开始 |
 | C | 路径安全重写 | ⭐高 | 待开始 |
@@ -94,12 +94,10 @@ PromptBuilder (agent/prompt.py)
 | G3 | 配置系统 (`chips config`) | 低 | 待开始 |
 | H1 | 图像理解支持 | 低 | 待开始 |
 
-### 当前子任务: A1
+### 当前子任务: A2
 
-1. **A1-1**: `agent/retry.py` — jittered backoff 工具函数
-2. **A1-2**: LLM 调用容错封装 — 429/超时重试，400/其他分类处理
-3. **A1-3**: Streaming 支持
-4. **A1-4**: 优雅迭代上限处理（死循环检测+降级回复）
+1. **A2-1**: 重写 `_maybe_trim_context` — Phase 1 压缩 tool 结果 + Phase 2 原子组删除
+2. **A2-2**: 5 个新测试覆盖压缩、组删除、配对保护、边界情况
 
 ---
 
