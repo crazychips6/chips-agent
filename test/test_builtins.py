@@ -1,5 +1,6 @@
-"""内置工具测试 — echo + memory 读写 handler"""
+"""内置工具测试 — echo + memory + file 读写 handler"""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -146,3 +147,31 @@ class TestFileTool:
         assert "file_read" in entries
         assert "file_write" in entries
         assert entries["file_read"].toolset == "core"
+
+    def test_symlink_to_env_is_blocked(self, tmp_path):
+        """符号链接指向 .env 应被拦截。"""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=key")
+        link = tmp_path / "config"
+        link.symlink_to(env_file)
+        result = global_registry.dispatch("file_read", {"path": str(link)})
+        assert "拒绝" in result
+
+    def test_resolve_dot_dot(self):
+        """Path.resolve() 正确处理 .. 穿越。"""
+        result = global_registry.dispatch("file_read", {"path": "../" * 10 + "tmp"})
+        # 穿越到 /tmp → 解析成功，但 /tmp 是目录不是文件
+        assert "不是普通文件" in result or "不存在" in result
+
+    def test_non_dot_env_allowed(self):
+        """env.txt 不是 .env，不应被误杀。"""
+        result = global_registry.dispatch("file_read", {"path": "env.txt"})
+        assert "拒绝" not in result
+
+    def test_etc_prefix_no_false_positive(self, tmp_path):
+        """/etc 前缀不误伤 /etcetera。"""
+        p = tmp_path / "etcetera.txt"
+        p.write_text("safe")
+        result = global_registry.dispatch("file_write", {"path": str(p), "content": "test"})
+        # 不应因为路径包含 "etc" 就被拦截
+        assert "拒绝" not in result

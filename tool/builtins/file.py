@@ -1,10 +1,10 @@
 """file 工具 — 文件读写
 
-模块级 _environment 引用由 cli.py wiring 时注入。
-工具本身不依赖其他项目模块。
-路径安全校验内联实现，不违反 tool/ 零依赖约束。"""
+路径安全校验内联实现，不违反 tool/ 零依赖约束。
+使用 Path.resolve() 跟随符号链接并归一化路径，防止绕过。"""
 
-import os
+import fnmatch
+from pathlib import Path
 
 from tool.registry import registry
 
@@ -41,43 +41,47 @@ _SENSITIVE_WRITE_PATHS: list[str] = [
 ]
 
 
-def _is_sensitive_path(abspath: str) -> str | None:
-    """检查路径是否敏感，返回原因或 None。"""
-    # 检查文件名/路径是否匹配敏感模式
+def _is_sensitive_path(resolved: Path) -> str | None:
+    """检查真实路径是否敏感，匹配目录名或文件名。"""
+    parts = resolved.parts
     for pattern in _SENSITIVE_FILE_PATTERNS:
         if pattern.endswith("/"):
-            # 目录匹配
-            if pattern.rstrip("/") in abspath.replace("\\", "/").split("/"):
+            if pattern.rstrip("/") in parts:
                 return f"拒绝访问敏感路径（匹配模式：{pattern}）"
-        elif "*" in pattern:
-            # glob 模式简化匹配
-            prefix = pattern.replace("*", "")
-            fn = os.path.basename(abspath)
-            if prefix in fn:
+        elif "*" in pattern or "?" in pattern:
+            if fnmatch.fnmatch(resolved.name, pattern):
                 return f"拒绝访问敏感文件（匹配模式：{pattern}）"
         else:
-            if pattern in abspath:
+            if resolved.name == pattern:
                 return f"拒绝访问敏感文件（匹配模式：{pattern}）"
     return None
 
 
-def _check_write_path(abspath: str) -> str | None:
+def _check_write_path(resolved: Path) -> str | None:
     """检查写入路径是否安全。"""
-    norm = os.path.normpath(abspath).replace("\\", "/")
+    str_path = str(resolved)
+    parts = resolved.parts
     for pattern in _SENSITIVE_WRITE_PATHS:
         stripped = pattern.rstrip("/")
-        if norm.startswith(stripped) or stripped in norm.split("/"):
-            return f"拒绝写入敏感路径（匹配模式：{pattern}）"
+        if stripped.startswith("/"):
+            # 绝对路径：检查 resolved 是否以该路径开头
+            prefix = stripped + "/"
+            if str_path == stripped or str_path.startswith(prefix):
+                return f"拒绝写入敏感路径（匹配模式：{pattern}）"
+        else:
+            # 相对路径组件：检查是否出现在路径段中
+            if stripped in parts:
+                return f"拒绝写入敏感路径（匹配模式：{pattern}）"
     return None
 
 
-def _resolve_path(path: str) -> tuple[str | None, str | None]:
-    """解析路径为绝对路径，返回 (abspath, error)。"""
+def _resolve_path(path: str) -> tuple[Path | None, str | None]:
+    """解析路径为真实绝对路径（跟随符号链接）。"""
     try:
-        abspath = os.path.abspath(path)
-    except Exception as e:
+        resolved = Path(path).resolve()
+    except (OSError, ValueError) as e:
         return None, f"路径解析错误：{e}"
-    return abspath, None
+    return resolved, None
 
 
 # ── Handler ──
@@ -88,20 +92,19 @@ def _read_handler(args) -> str:
     if not path:
         return "错误：路径不能为空"
 
-    abspath, err = _resolve_path(path)
+    resolved, err = _resolve_path(path)
     if err:
         return err
 
-    reason = _is_sensitive_path(abspath)
+    reason = _is_sensitive_path(resolved)
     if reason:
         return reason
 
-    if not os.path.isfile(abspath):
+    if not resolved.is_file():
         return f"错误：文件不存在或不是普通文件：{path}"
 
     try:
-        with open(abspath, encoding="utf-8", errors="replace") as f:
-            content = f.read()
+        content = resolved.read_text(encoding="utf-8", errors="replace")
         return content
     except PermissionError:
         return f"错误：无权限读取文件：{path}"
@@ -117,27 +120,27 @@ def _write_handler(args) -> str:
     if not path:
         return "错误：路径不能为空"
 
-    abspath, err = _resolve_path(path)
+    resolved, err = _resolve_path(path)
     if err:
         return err
 
-    reason = _check_write_path(abspath)
+    reason = _check_write_path(resolved)
     if reason:
         return reason
 
     # 检查文件已存在且为敏感类型（写入覆盖检查）
-    if os.path.exists(abspath):
-        reason = _is_sensitive_path(abspath)
+    if resolved.exists():
+        reason = _is_sensitive_path(resolved)
         if reason:
             return reason
 
     try:
-        os.makedirs(os.path.dirname(abspath) or ".", exist_ok=True)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
         flag = "a" if mode == "append" else "w"
-        with open(abspath, flag, encoding="utf-8") as f:
+        with open(resolved, flag, encoding="utf-8") as f:
             f.write(content)
         verb = "追加到" if mode == "append" else "写入"
-        return f"已{verb} {os.path.relpath(abspath)}（{len(content)} 字符）"
+        return f"已{verb} {resolved}（{len(content)} 字符）"
     except PermissionError:
         return f"错误：无权限写入文件：{path}"
     except Exception as e:
