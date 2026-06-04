@@ -1,6 +1,7 @@
 """AIAgent — ReAct 循环"""
 
 import json
+import logging
 import os
 import re
 import sys
@@ -18,6 +19,8 @@ _SURROGATE_RE = re.compile('[\ud800-\udfff]')
 
 def _sanitize(text: str) -> str:
     return _SURROGATE_RE.sub("", text)
+
+logger = logging.getLogger("chips")
 
 from agent.prompt import PromptBuilder
 from agent.retry import jittered_backoff
@@ -78,6 +81,7 @@ class AIAgent:
                 last_error = "API 速率限制"
                 if attempt < self._max_retries:
                     delay = jittered_backoff(attempt)
+                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
                     print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
                     time.sleep(delay)
             except openai.APIStatusError as e:
@@ -85,6 +89,7 @@ class AIAgent:
                     last_error = f"服务暂时不可用 ({e.status_code})"
                     if attempt < self._max_retries:
                         delay = jittered_backoff(attempt, base_delay=2.0)
+                        logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
                         print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
                         time.sleep(delay)
                 else:
@@ -93,12 +98,14 @@ class AIAgent:
                 last_error = "请求超时"
                 if attempt < self._max_retries:
                     delay = jittered_backoff(attempt, base_delay=2.0)
+                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
                     print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
                     time.sleep(delay)
             except openai.APIConnectionError:
                 last_error = "网络连接异常"
                 if attempt < self._max_retries:
                     delay = jittered_backoff(attempt, base_delay=2.0)
+                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
                     print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
                     time.sleep(delay)
             except openai.BadRequestError as e:
@@ -113,14 +120,26 @@ class AIAgent:
 
     def _call_llm(self, kwargs) -> any:
         """非流式调用，带自动重试。"""
+        _res = {}
         def _do_call():
             response = self.client.chat.completions.create(**kwargs)
+            _res["response"] = response
             return response.choices[0].message
-        return self._call_with_retry(_do_call)
+        t0 = time.time()
+        msg = self._call_with_retry(_do_call)
+        elapsed = int((time.time() - t0) * 1000)
+        if "response" in _res:
+            usage = _res["response"].usage
+            pt = usage.prompt_tokens if usage else -1
+            ct = usage.completion_tokens if usage else -1
+            logger.info("llm_call model=%s stream=false duration_ms=%d prompt_tokens=%d completion_tokens=%d",
+                         self.model, elapsed, pt, ct)
+        return msg
 
     def _call_llm_streaming(self, kwargs) -> any:
         """流式调用，逐 chunk 输出，带自动重试。"""
         stream_kwargs = {**kwargs, "stream": True, "stream_options": {"include_usage": True}}
+        _usage = {}
 
         def _do_stream():
             stream = self.client.chat.completions.create(**stream_kwargs)
@@ -128,6 +147,9 @@ class AIAgent:
             tool_calls: dict[int, dict] = {}
 
             for chunk in stream:
+                if chunk.usage:
+                    _usage["prompt"] = chunk.usage.prompt_tokens
+                    _usage["completion"] = chunk.usage.completion_tokens
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -174,7 +196,14 @@ class AIAgent:
 
             return msg
 
-        return self._call_with_retry(_do_stream, desc="流式 LLM 调用")
+        t0 = time.time()
+        msg = self._call_with_retry(_do_stream, desc="流式 LLM 调用")
+        elapsed = int((time.time() - t0) * 1000)
+        pt = _usage.get("prompt", -1)
+        ct = _usage.get("completion", -1)
+        logger.info("llm_call model=%s stream=true duration_ms=%d prompt_tokens=%d completion_tokens=%d",
+                     self.model, elapsed, pt, ct)
+        return msg
 
     # ── 消息构建 ──
 
@@ -320,6 +349,8 @@ class AIAgent:
         if total <= self.max_context_chars:
             return
 
+        chars_before = total
+
         # Phase 1: 压缩 tool 结果内容（非破坏性，保留结构完整）
         TOOL_MAX_LEN = 2000
         for m in self.messages:
@@ -327,9 +358,12 @@ class AIAgent:
                 m["content"] = m["content"][:TOOL_MAX_LEN] + "\n...(truncated)"
 
         if self._total_chars() <= self.max_context_chars:
+            logger.info("context_trim phase=1 before_chars=%d after_chars=%d",
+                         chars_before, self._total_chars())
             return
 
         # Phase 2: 从中间逐组删除（assistant+tool 为原子单位）
+        groups_removed = 0
         while self._total_chars() > self.max_context_chars:
             if len(self.messages) <= 3:
                 break
@@ -354,8 +388,13 @@ class AIAgent:
 
             # 删除第 1 组之后、最后 2 组之前的最旧中间组
             target = groups[1]
+            groups_removed += 1
             for pos in sorted(target, reverse=True):
                 self.messages.pop(pos)
+
+        if groups_removed:
+            logger.warning("context_trim phase=2 before_chars=%d after_chars=%d groups_removed=%d",
+                            chars_before, self._total_chars(), groups_removed)
 
     def _total_chars(self) -> int:
         return sum(len(m.get("content") or "") for m in self.messages)

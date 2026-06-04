@@ -11,8 +11,11 @@ check() 返回 ApprovalResult，调用方根据 action 决定是否执行。
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import re
 import sys
+
+logger = logging.getLogger("chips")
 
 
 class ApprovalAction(Enum):
@@ -85,6 +88,7 @@ def check(command: str, interactive: bool = True) -> ApprovalResult:
     # 1. 硬拦截 — 直接拒绝
     for _name, pattern, msg in _HARDLINE:
         if pattern.search(command):
+            logger.warning("approval=deny reason=hardline pattern=%s command=%.120s", _name, command)
             return ApprovalResult(ApprovalAction.DENY, msg)
 
     # 2. 危险模式 — 交互询问
@@ -94,8 +98,11 @@ def check(command: str, interactive: bool = True) -> ApprovalResult:
                 print(f"\n⚠ {msg}", file=sys.stderr)
                 resp = input("  确认执行? (y/N) ").strip().lower()
                 if resp in ("y", "yes"):
+                    logger.info("approval=allow reason=user_confirm pattern=%s command=%.120s", _name, command)
                     return ApprovalResult(ApprovalAction.ALLOW, "用户已确认")
+                logger.info("approval=deny reason=user_reject pattern=%s command=%.120s", _name, command)
                 return ApprovalResult(ApprovalAction.DENY, f"用户拒绝：{msg}")
+            logger.info("approval=deny reason=non_interactive pattern=%s command=%.120s", _name, command)
             return ApprovalResult(ApprovalAction.DENY, f"非交互模式拒绝：{msg}")
 
     return ApprovalResult(ApprovalAction.ALLOW, "")

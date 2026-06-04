@@ -10,10 +10,13 @@ generation，get_definitions 和 dispatch 在持有锁期间读到的是全一�
 
 import asyncio
 import json
+import logging
 import time
 from threading import RLock
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger("chips")
 
 # check_fn 结果的缓存秒数，避免每次 get_definitions 都重新执行昂贵的检查
 _CHECK_FN_TTL = 30.0
@@ -98,9 +101,11 @@ class ToolRegistry:
 
         支持同步/异步 handler；异常会被捕获并序列化为 JSON 错误返回（不会抛到上层）。
         """
+        t0 = time.time()
         with self._lock:
             entry = self._entries.get(name)
         if not entry:
+            logger.warning("tool=%s status=unknown_tool", name)
             return json.dumps({"error": f"unknown tool: {name}"})
 
         try:
@@ -109,6 +114,8 @@ class ToolRegistry:
             else:
                 result = entry.handler(args)
         except Exception as e:
+            elapsed = int((time.time() - t0) * 1000)
+            logger.warning("tool=%s status=error duration_ms=%d", name, elapsed)
             result = json.dumps({"error": f"{type(e).__name__}: {e}"})
 
         if isinstance(result, str):
@@ -117,6 +124,8 @@ class ToolRegistry:
         else:
             result = json.dumps(result, ensure_ascii=False)
 
+        elapsed = int((time.time() - t0) * 1000)
+        logger.info("tool=%s status=ok duration_ms=%d", name, elapsed)
         return result
 
     @property
