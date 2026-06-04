@@ -175,3 +175,229 @@ class TestFileTool:
         result = global_registry.dispatch("file_write", {"path": str(p), "content": "test"})
         # 不应因为路径包含 "etc" 就被拦截
         assert "拒绝" not in result
+
+
+class TestFileReadLineRange:
+    """文件行范围读取。"""
+
+    def test_read_full_file_by_default(self, tmp_path):
+        """不指定行范围时行为不变——返回全文。"""
+        p = tmp_path / "full.txt"
+        p.write_text("line1\nline2\nline3\n")
+        result = global_registry.dispatch("file_read", {"path": str(p)})
+        assert result == "line1\nline2\nline3\n"
+
+    def test_read_range(self, tmp_path):
+        """start_line + end_line 返回对应行。"""
+        p = tmp_path / "range.txt"
+        p.write_text("a\nb\nc\nd\ne\n")
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 2, "end_line": 4})
+        assert "2 | b" in result
+        assert "3 | c" in result
+        assert "4 | d" in result
+        assert "1 | a" not in result
+        assert "5 | e" not in result
+
+    def test_read_single_line(self, tmp_path):
+        """start_line=end_line 只返回一行。"""
+        p = tmp_path / "single.txt"
+        p.write_text("alpha\nbeta\ngamma\n")
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 2, "end_line": 2})
+        assert "2 | beta" in result
+        assert "alpha" not in result
+        assert "gamma" not in result
+
+    def test_read_from_start(self, tmp_path):
+        """只给 end_line，从开头读到 end_line。"""
+        p = tmp_path / "head.txt"
+        p.write_text("1\n2\n3\n4\n5\n")
+        result = global_registry.dispatch("file_read", {"path": str(p), "end_line": 3})
+        assert "1 | 1" in result
+        assert "3 | 3" in result
+        assert "4 | 4" not in result
+
+    def test_read_to_end(self, tmp_path):
+        """只给 start_line，从该行读到末尾。"""
+        p = tmp_path / "tail.txt"
+        p.write_text("1\n2\n3\n4\n5\n")
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 4})
+        assert "4 | 4" in result
+        assert "5 | 5" in result
+        assert "1 | 1" not in result
+
+    def test_start_line_out_of_range(self, tmp_path):
+        p = tmp_path / "short.txt"
+        p.write_text("only one")
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 10})
+        assert "超出" in result
+
+    def test_end_line_gt_total(self, tmp_path):
+        """end_line 超出总行数时自动截断。"""
+        p = tmp_path / "three_lines.txt"
+        p.write_text("1\n2\n3\n")
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 2, "end_line": 999})
+        assert "2 | 2" in result
+        assert "3 | 3" in result
+
+    def test_line_number_padding(self, tmp_path):
+        """行号前缀宽度自适应。"""
+        p = tmp_path / "many.txt"
+        p.write_text("\n".join(f"line{i}" for i in range(1, 101)))
+        result = global_registry.dispatch("file_read", {"path": str(p), "start_line": 90, "end_line": 100})
+        # 90-100 需要宽度 3 来对齐
+        lines = result.split("\n")
+        assert len(lines) == 11  # 90..100 inclusive
+        # 行 90-99 前面应有 1 个空格（宽度 3，数字占 2 位）
+        assert lines[0].startswith(" 90 |")
+        # 行 100 前面有 3 个数字，无空格前缀
+        assert lines[-1].startswith("100 |")
+
+
+class TestFilePatch:
+    """file_write patch 模式。"""
+
+    def test_patch_replace_first_occurrence(self, tmp_path):
+        p = tmp_path / "patch.txt"
+        p.write_text("hello world\nhello chips\n")
+        result = global_registry.dispatch("file_write", {
+            "path": str(p), "mode": "patch",
+            "search": "hello", "replace": "hi",
+        })
+        assert "已替换" in result
+        assert p.read_text() == "hi world\nhello chips\n"
+
+    def test_patch_no_match(self, tmp_path):
+        p = tmp_path / "nomatch.txt"
+        p.write_text("abc\n")
+        result = global_registry.dispatch("file_write", {
+            "path": str(p), "mode": "patch",
+            "search": "xyz", "replace": "foo",
+        })
+        assert "未找到" in result
+        assert p.read_text() == "abc\n"  # 未修改
+
+    def test_patch_empty_search(self, tmp_path):
+        p = tmp_path / "empty_search.txt"
+        p.write_text("content")
+        result = global_registry.dispatch("file_write", {
+            "path": str(p), "mode": "patch",
+            "search": "", "replace": "x",
+        })
+        assert "错误" in result
+
+    def test_patch_preserves_rest_of_file(self, tmp_path):
+        """替换后文件其余部分不受影响。"""
+        p = tmp_path / "preserve.txt"
+        p.write_text("1\nTARGET\n2\nTARGET\n3\n")
+        global_registry.dispatch("file_write", {
+            "path": str(p), "mode": "patch",
+            "search": "TARGET", "replace": "REPLACED",
+        })
+        assert p.read_text() == "1\nREPLACED\n2\nTARGET\n3\n"  # 只替换第一处
+
+    def test_patch_requires_search(self, tmp_path):
+        p = tmp_path / "no_search_param.txt"
+        p.write_text("content")
+        result = global_registry.dispatch("file_write", {
+            "path": str(p), "mode": "patch",
+            "replace": "new",
+        })
+        assert "错误" in result
+
+
+class TestFileSearch:
+    """file_search 工具。"""
+
+    def test_search_text_in_file(self, tmp_path):
+        f = tmp_path / "greeting.txt"
+        f.write_text("hello world\nfoo bar\nHELLO again\n")
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": "hello",
+        })
+        assert "greeting.txt" in result
+        assert "hello world" in result
+        assert "HELLO again" in result  # 不区分大小写
+
+    def test_search_exact_case(self, tmp_path):
+        """text 模式不区分大小写。"""
+        f = tmp_path / "case.txt"
+        f.write_text("Hello\nWORLD\n")
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": "hello",
+        })
+        assert "Hello" in result
+
+    def test_search_regex(self, tmp_path):
+        f = tmp_path / "regex.txt"
+        f.write_text("abc123\ndef456\nxyz\n")
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": r"\d{3}",
+            "pattern_type": "regex",
+        })
+        assert "abc123" in result
+        assert "def456" in result
+        assert "xyz" not in result
+
+    def test_search_no_match(self, tmp_path):
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": "nonexistent",
+        })
+        assert "未找到" in result
+
+    def test_search_empty_pattern(self):
+        result = global_registry.dispatch("file_search", {"pattern": ""})
+        assert "错误" in result
+
+    def test_search_bad_regex(self):
+        result = global_registry.dispatch("file_search", {
+            "pattern": r"[invalid",
+            "pattern_type": "regex",
+        })
+        assert "错误" in result
+
+    def test_search_nonexistent_path(self):
+        result = global_registry.dispatch("file_search", {
+            "path": "/nonexistent_dir_xyz_999",
+            "pattern": "test",
+        })
+        assert "错误" in result or "不存在" in result
+
+    def test_search_single_file(self, tmp_path):
+        f = tmp_path / "target.txt"
+        f.write_text("secret content")
+        # 指向文件而非目录
+        result = global_registry.dispatch("file_search", {
+            "path": str(f),
+            "pattern": "secret",
+        })
+        assert "target.txt" in result
+
+    def test_search_skips_binary(self, tmp_path):
+        """二进制文件不崩溃，被跳过。"""
+        f = tmp_path / "binary.bin"
+        f.write_bytes(b"\x00\x01\x02\x03")
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": "test",
+        })
+        assert "未找到" in result
+
+    def test_search_skips_sensitive(self, tmp_path):
+        """搜索跳过 .git/ .chips/ 等目录。"""
+        git = tmp_path / ".git"
+        git.mkdir()
+        (git / "config").write_text("sensitive data")
+        result = global_registry.dispatch("file_search", {
+            "path": str(tmp_path),
+            "pattern": "sensitive",
+        })
+        assert "未找到" in result
+
+    def test_search_registered(self):
+        entries = global_registry._entries
+        assert "file_search" in entries
+        assert entries["file_search"].toolset == "core"
