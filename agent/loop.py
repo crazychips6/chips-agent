@@ -25,6 +25,7 @@ logger = logging.getLogger("chips")
 from agent.prompt import PromptBuilder
 from agent.retry import jittered_backoff
 from memory.store import MemoryStore
+from safety.audit import log_event
 from session.db import SessionDB
 from tool.registry import ToolRegistry
 
@@ -307,6 +308,11 @@ class AIAgent:
                         continue
 
                     result = self.registry.dispatch(tc.function.name, args)
+                    log_event("tool_call", {
+                        "tool": tc.function.name,
+                        "args_truncated": args_str[:200],
+                        "session_id": self.session_id,
+                    })
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -395,6 +401,12 @@ class AIAgent:
         if groups_removed:
             logger.warning("context_trim phase=2 before_chars=%d after_chars=%d groups_removed=%d",
                             chars_before, self._total_chars(), groups_removed)
+            log_event("context_trim", {
+                "phase": 2,
+                "before_chars": chars_before,
+                "after_chars": self._total_chars(),
+                "groups_removed": groups_removed,
+            })
 
     def _total_chars(self) -> int:
         return sum(len(m.get("content") or "") for m in self.messages)

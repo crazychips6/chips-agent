@@ -14,6 +14,7 @@ import subprocess
 import time
 
 from safety.approval import check, ApprovalAction
+from safety.audit import log_event
 from safety.sanitize import strip_env
 from environment.base import Environment, ExecuteResult
 
@@ -38,6 +39,11 @@ class LocalEnvironment(Environment):
         """执行命令，带安全审批 + 凭证剥离。"""
         # 1. 安全审批
         result = check(command, interactive=self._interactive)
+        log_event("approval", {
+            "action": result.action.value,
+            "reason": result.reason or "safe",
+            "command_truncated": command[:120],
+        })
         if result.action == ApprovalAction.DENY:
             return ExecuteResult(
                 returncode=-1,

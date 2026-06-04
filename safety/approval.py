@@ -2,7 +2,7 @@
 
 三层筛查机制：
 1. HARDLINE_PATTERNS — 命中直接拒绝，不询问用户
-2. DANGEROUS_PATTERNS — 命中需要用户交互确认
+2. DANGEROUS_PATTERNS — 命中需要用户交互确认（匹配前先查白名单）
 3. 未命中任何模式 — 直接放行
 
 check() 返回 ApprovalResult，调用方根据 action 决定是否执行。
@@ -14,6 +14,9 @@ from enum import Enum
 import logging
 import re
 import sys
+
+from safety.allowlist import check as allowlist_check, add as allowlist_add
+from safety.audit import log_event
 
 logger = logging.getLogger("chips")
 
@@ -89,20 +92,30 @@ def check(command: str, interactive: bool = True) -> ApprovalResult:
     for _name, pattern, msg in _HARDLINE:
         if pattern.search(command):
             logger.warning("approval=deny reason=hardline pattern=%s command=%.120s", _name, command)
+            log_event("approval", {"action": "deny", "reason": "hardline", "pattern": _name, "command_truncated": command[:120]})
             return ApprovalResult(ApprovalAction.DENY, msg)
 
-    # 2. 危险模式 — 交互询问
+    # 2. 白名单检查 — 精确匹配直接放行
+    if allowlist_check(command):
+        logger.info("approval=allow reason=allowlist command=%.120s", command)
+        return ApprovalResult(ApprovalAction.ALLOW, "白名单放行")
+
+    # 3. 危险模式 — 交互询问
     for _name, pattern, msg in _DANGEROUS:
         if pattern.search(command):
             if interactive:
                 print(f"\n⚠ {msg}", file=sys.stderr)
                 resp = input("  确认执行? (y/N) ").strip().lower()
                 if resp in ("y", "yes"):
+                    allowlist_add(command, _name)
                     logger.info("approval=allow reason=user_confirm pattern=%s command=%.120s", _name, command)
+                    log_event("approval", {"action": "allow", "reason": "user_confirm", "pattern": _name, "command_truncated": command[:120]})
                     return ApprovalResult(ApprovalAction.ALLOW, "用户已确认")
                 logger.info("approval=deny reason=user_reject pattern=%s command=%.120s", _name, command)
+                log_event("approval", {"action": "deny", "reason": "user_reject", "pattern": _name, "command_truncated": command[:120]})
                 return ApprovalResult(ApprovalAction.DENY, f"用户拒绝：{msg}")
             logger.info("approval=deny reason=non_interactive pattern=%s command=%.120s", _name, command)
+            log_event("approval", {"action": "deny", "reason": "non_interactive", "pattern": _name, "command_truncated": command[:120]})
             return ApprovalResult(ApprovalAction.DENY, f"非交互模式拒绝：{msg}")
 
     return ApprovalResult(ApprovalAction.ALLOW, "")

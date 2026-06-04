@@ -10,6 +10,20 @@ from safety.approval import (
     HARDLINE_PATTERNS,
     DANGEROUS_PATTERNS,
 )
+from safety.allowlist import add as allowlist_add
+
+
+@pytest.fixture(autouse=True)
+def _no_allowlist(monkeypatch):
+    """禁用白名单交互，避免测试污染真实 allowlist 文件。"""
+    monkeypatch.setattr("safety.approval.allowlist_check", lambda cmd: False)
+    monkeypatch.setattr("safety.approval.allowlist_add", lambda cmd, pattern="": None)
+
+
+@pytest.fixture(autouse=True)
+def _no_audit(monkeypatch):
+    """禁用审计日志，避免测试写入真实 audit DB。"""
+    monkeypatch.setattr("safety.approval.log_event", lambda tp, data: None)
 
 
 class TestHardlinePatterns:
@@ -136,3 +150,60 @@ class TestEdgeCases:
         """如果同时匹配 hardline 和 dangerous，hardline 优先。"""
         result = check("sudo rm -rf /", interactive=False)
         assert result.action == ApprovalAction.DENY
+
+
+class TestAllowlistIntegration:
+    """白名单集成测试：匹配的命令跳过交互式审批。"""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        """使用真实的 allowlist 实现来测试集成。"""
+        # 恢复 allowlist 函数（_no_allowlist fixture 禁用了它）
+        from safety import allowlist
+        monkeypatch.setattr("safety.approval.allowlist_check", allowlist.check)
+        monkeypatch.setattr("safety.approval.allowlist_add", allowlist.add)
+
+    def test_allowlist_bypasses_dangerous_check(self, tmp_path, monkeypatch):
+        """白名单中的 dangerous 命令直接 ALLOW，不询问。"""
+        monkeypatch.setattr("safety.allowlist._ALLOWLIST_PATH", tmp_path / "allowlist.yaml")
+        allowlist_add("sudo apt update")
+        result = check("sudo apt update", interactive=True)
+        assert result.action == ApprovalAction.ALLOW
+        assert "白名单" in result.reason
+
+    def test_allowlist_exact_match_only(self, tmp_path, monkeypatch):
+        """白名单是精确匹配，相似但不相同的命令仍需审批。"""
+        monkeypatch.setattr("safety.allowlist._ALLOWLIST_PATH", tmp_path / "allowlist.yaml")
+        allowlist_add("sudo apt update")
+        result = check("sudo apt upgrade", interactive=False)
+        assert result.action == ApprovalAction.DENY  # 不在白名单中
+
+    def test_allowlist_does_not_bypass_hardline(self, tmp_path, monkeypatch):
+        """白名单不绕过硬拦截。"""
+        monkeypatch.setattr("safety.allowlist._ALLOWLIST_PATH", tmp_path / "allowlist.yaml")
+        allowlist_add("rm -rf /")
+        result = check("rm -rf /", interactive=False)
+        assert result.action == ApprovalAction.DENY  # 硬拦截优先
+
+    def test_user_approval_adds_to_allowlist(self, tmp_path, monkeypatch):
+        """用户批准后命令被自动加入白名单。"""
+        monkeypatch.setattr("safety.allowlist._ALLOWLIST_PATH", tmp_path / "allowlist.yaml")
+        # 批准一次
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        result = check("sudo apt update", interactive=True)
+        assert result.action == ApprovalAction.ALLOW
+        # 验证已加入白名单（不再需要 mock input）
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        result = check("sudo apt update", interactive=True)
+        assert result.action == ApprovalAction.ALLOW
+
+    def test_allowlist_persists_across_calls(self, tmp_path, monkeypatch):
+        """白名单条目持久化在文件中，跨 check() 调用保持。"""
+        monkeypatch.setattr("safety.allowlist._ALLOWLIST_PATH", tmp_path / "allowlist.yaml")
+        # 模拟用户批准
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        check("sudo make install", interactive=True)
+        # 下次调用直接放行（不需要再 mock input）
+        monkeypatch.setattr("builtins.input", lambda _: "n")  # 如果没命中白名单会拒绝
+        result = check("sudo make install", interactive=True)
+        assert result.action == ApprovalAction.ALLOW

@@ -84,8 +84,8 @@ PromptBuilder (agent/prompt.py)
 | B1 | 子进程生命周期管理 | ⭐高 | ✅ **已完成** |
 | B2 | DockerEnvironment | ⭐高 | ✅ **已完成** |
 | C | 路径安全重写 | ⭐高 | ✅ **已完成** |
-| D1 | 持久化审批白名单 | 中 | 待开始 |
-| D2 | 审计日志 | 中 | 待开始 |
+| D1 | 持久化审批白名单 | 中 | ✅ **已完成** |
+| D2 | 审计日志 | 中 | ✅ **已完成** |
 | E1 | 文件操作增强 (patch/grep/行范围) | 中 | 待开始 |
 | E2 | Web 工具 | 中 | 待开始 |
 | F1 | 记忆层级扩展 (working/episodic/semantic) | 中 | 待开始 |
@@ -94,7 +94,7 @@ PromptBuilder (agent/prompt.py)
 | G3 | 配置系统 (`chips config`) | 低 | 待开始 |
 | H1 | 图像理解支持 | 低 | 待开始 |
 
-### 当前子任务: C
+### 当前子任务: E1 + E2
 
 待开始
 
