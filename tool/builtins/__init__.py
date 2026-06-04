@@ -8,3 +8,4 @@ import tool.builtins.echo      # noqa: F401
 import tool.builtins.memory    # noqa: F401
 import tool.builtins.terminal  # noqa: F401
 import tool.builtins.file      # noqa: F401
+import tool.builtins.web       # noqa: F401

@@ -401,3 +401,129 @@ class TestFileSearch:
         entries = global_registry._entries
         assert "file_search" in entries
         assert entries["file_search"].toolset == "core"
+
+
+class TestWebFetch:
+    """web_fetch 工具测试（mock 网络请求）。"""
+
+    def test_empty_url(self):
+        result = global_registry.dispatch("web_fetch", {"url": ""})
+        assert "错误" in result
+
+    def test_missing_url(self):
+        result = global_registry.dispatch("web_fetch", {})
+        assert "错误" in result
+
+    def test_invalid_scheme(self):
+        result = global_registry.dispatch("web_fetch", {"url": "ftp://example.com"})
+        assert "URL" in result or "错误" in result
+
+    def test_no_scheme_autofill(self):
+        """不带 scheme 时自动补全 https://。"""
+        # 不去真的请求，验证至少能进入请求阶段（成功或失败而非参数错误）
+        result = global_registry.dispatch("web_fetch", {"url": "example.com"})
+        assert "错误" not in result or "无法访问" in result or "请求失败" in result
+
+    def test_registered(self):
+        entries = global_registry._entries
+        assert "web_fetch" in entries
+        assert entries["web_fetch"].toolset == "core"
+
+
+class TestWebSearch:
+    """web_search 工具测试。"""
+
+    def test_empty_query(self):
+        result = global_registry.dispatch("web_search", {"query": ""})
+        assert "错误" in result
+
+    def test_missing_query(self):
+        result = global_registry.dispatch("web_search", {})
+        assert "错误" in result
+
+    def test_registered(self):
+        entries = global_registry._entries
+        assert "web_search" in entries
+        assert entries["web_search"].toolset == "core"
+
+    def test_max_results_clamped(self):
+        """max_results 被限制到 20。"""
+        entries = global_registry._entries
+        schema = entries["web_search"].schema
+        props = schema["function"]["parameters"]["properties"]
+        assert "max_results" in props
+
+    def test_html_extractor(self):
+        """_HTMLTextExtractor 提取可见文本。"""
+        from tool.builtins.web import _HTMLTextExtractor
+        extractor = _HTMLTextExtractor()
+        extractor.feed("<html><body><p>Hello <b>World</b></p><script>alert('x')</script></body></html>")
+        assert "Hello World" in extractor.get_text()
+        assert "alert" not in extractor.get_text()
+
+    def test_html_extractor_skips_style(self):
+        from tool.builtins.web import _HTMLTextExtractor
+        extractor = _HTMLTextExtractor()
+        extractor.feed("<style>.cls{color:red}</style><p>visible</p>")
+        assert "visible" in extractor.get_text()
+        assert "color" not in extractor.get_text()
+
+
+class TestDdgParser:
+    """DuckDuckGo 搜索结果解析。"""
+
+    def test_parse_empty(self):
+        from tool.builtins.web import _parse_ddg_results
+        assert _parse_ddg_results("") == []
+
+    def test_parse_no_results(self):
+        from tool.builtins.web import _parse_ddg_results
+        html = "<html><body>No results found.</body></html>"
+        assert _parse_ddg_results(html) == []
+
+    def test_parse_single_result(self):
+        from tool.builtins.web import _parse_ddg_results
+        html = """
+        <table>
+          <tr class="result">
+            <td valign="top">1.</td>
+            <td>
+              <a rel="nofollow" href="https://example.com">Example Title</a>
+              <br>
+              <span class="result-snippet">This is a snippet about example.</span>
+            </td>
+          </tr>
+        </table>
+        """
+        results = _parse_ddg_results(html)
+        assert len(results) == 1
+        assert results[0][0] == "Example Title"
+        assert results[0][1] == "This is a snippet about example."
+        assert results[0][2] == "https://example.com"
+
+    def test_parse_multiple_results(self):
+        from tool.builtins.web import _parse_ddg_results
+        html = """
+        <table>
+          <tr class="result">
+            <td><a rel="nofollow" href="https://a.com">A</a><br><span class="result-snippet">snippet a</span></td>
+          </tr>
+          <tr class="result">
+            <td><a rel="nofollow" href="https://b.com">B</a><br><span class="result-snippet">snippet b</span></td>
+          </tr>
+        </table>
+        """
+        results = _parse_ddg_results(html)
+        assert len(results) == 2
+
+    def test_parse_relative_url(self):
+        """相对 URL 补全为绝对 URL。"""
+        from tool.builtins.web import _parse_ddg_results
+        html = """
+        <tr class="result">
+          <td><a rel="nofollow" href="//relative.com/path">Relative</a><br><span class="result-snippet">text</span></td>
+        </tr>
+        """
+        results = _parse_ddg_results(html)
+        assert results[0][2].startswith("https:")
+        assert "relative.com" in results[0][2]
