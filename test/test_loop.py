@@ -113,7 +113,7 @@ class TestRunConversation:
 
         call_kwargs = mock_openai.chat.completions.create.call_args[1]
         system = call_kwargs["messages"][0]["content"]
-        for layer in ("核心身份", "当前日期", "用户偏好", "记忆快照",
+        for layer in ("核心身份", "当前日期", "用户偏好", "持久记忆",
                       "项目上下文", "工具规则", "调用约定"):
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
@@ -140,7 +140,7 @@ class TestRunConversation:
         assert "# 当前日期" in system
         assert "# 调用约定" in system
         assert "# 用户偏好" not in system
-        assert "# 记忆快照" not in system
+        assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
         assert "# 工具规则" not in system
 

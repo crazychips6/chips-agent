@@ -245,6 +245,8 @@ class AIAgent:
         system = self.prompt_builder.build(
             memory=memory_data.get("memory", ""),
             user=memory_data.get("user", ""),
+            episodic=memory_data.get("episodic", ""),
+            working=memory_data.get("working") if self.memory else None,
             context_files=self.context_files,
             tool_defs=tool_defs,
         )

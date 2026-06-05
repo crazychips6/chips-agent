@@ -1,9 +1,14 @@
 """web 工具 — web_fetch（HTTP GET）+ web_search（搜索）
 
 使用 stdlib urllib 实现，零外部依赖。
-自带 HTML 内容提取、SSRF 防护、超时和大小限制。"""
+自带 HTML 内容提取、SSRF 防护、超时和大小限制。
+
+web_search 后端选择（按优先级）：
+1. TAVILY_API_KEY 环境变量 → Tavily Search API
+2. 否则 → DuckDuckGo Lite"""
 
 import ipaddress
+import json as _json
 import os
 import re
 import socket
@@ -20,6 +25,8 @@ _MAX_OUTPUT_CHARS = 10_000
 _REQUEST_TIMEOUT = 15
 
 _USER_AGENT = "Mozilla/5.0 (compatible; chips-agent/0.2.0)"
+
+_TAVILY_URL = "https://api.tavily.com/search"
 
 # 禁止访问的内网/本地地址
 _BLOCKED_NETWORKS = [
@@ -148,11 +155,66 @@ def _fetch_handler(args) -> str:
 
 
 def _search_handler(args) -> str:
-    """使用 DuckDuckGo Lite 搜索，返回标题 + URL + 摘要。"""
+    """搜索互联网。优先使用 Tavily（若 TAVILY_API_KEY 已设置），否则回退 DuckDuckGo。"""
     query = args.get("query", "").strip()
     if not query:
         return "错误：搜索关键词不能为空"
 
+    api_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    if api_key:
+        return _tavily_search(query, api_key, args)
+
+    return _ddg_search(query, args)
+
+
+def _tavily_search(query: str, api_key: str, args) -> str:
+    """通过 Tavily Search API 搜索。"""
+    num_results = min(args.get("max_results", 10), 20)
+    payload = _json.dumps({
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "max_results": num_results,
+    }).encode()
+
+    try:
+        req = urllib.request.Request(
+            _TAVILY_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+
+        data = _json.loads(raw)
+        results = data.get("results", [])
+
+        if not results:
+            return f"未找到 '{query}' 的搜索结果"
+
+        lines = []
+        for i, r in enumerate(results[:num_results], 1):
+            title = r.get("title", "")
+            url = r.get("url", "")
+            content = r.get("content", "")
+            lines.append(f"{i}. {title}\n   链接: {url}\n   摘要: {content[:200]}")
+
+        total = len(results)
+        suffix = f"\n... 共 {total} 条结果" if total > num_results else ""
+        return "\n\n".join(lines) + suffix
+
+    except urllib.error.HTTPError as e:
+        return f"错误：搜索服务 HTTP {e.code}"
+    except urllib.error.URLError as e:
+        return f"错误：无法访问搜索服务：{e.reason}"
+    except _json.JSONDecodeError:
+        return "错误：搜索服务返回了无法解析的响应"
+    except Exception as e:
+        return f"错误：搜索失败：{e}"
+
+
+def _ddg_search(query: str, args) -> str:
+    """使用 DuckDuckGo Lite 搜索作为回退。"""
     search_url = f"https://lite.duckduckgo.com/lite/?q={urllib.parse.quote(query)}"
     num_results = min(args.get("max_results", 10), 20)
 

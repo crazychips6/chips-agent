@@ -71,7 +71,7 @@ class TestAgentWiring:
         call_kwargs = mock_openai.chat.completions.create.call_args[1]
         system = call_kwargs["messages"][0]["content"]
 
-        layers = ["核心身份", "当前日期", "用户偏好", "记忆快照",
+        layers = ["核心身份", "当前日期", "用户偏好", "持久记忆",
                    "项目上下文", "工具规则", "调用约定"]
         for layer in layers:
             assert f"# {layer}" in system, f"缺少层: {layer}"
@@ -96,7 +96,7 @@ class TestAgentWiring:
         assert "# 工具规则" in system
         assert "# 调用约定" in system
         assert "# 用户偏好" not in system
-        assert "# 记忆快照" not in system
+        assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
 
     def test_context_files_flow_into_prompt(self, clean_registry, mock_openai, tmp_path):

@@ -152,6 +152,8 @@ class PromptBuilder:
         *,
         memory: str = "",
         user: str = "",
+        episodic: str = "",
+        working: dict[str, str] | None = None,
         context_files: list[tuple[str, str, str]] | None = None,
         tool_defs: list[dict] | None = None,
     ) -> str:
@@ -167,22 +169,31 @@ class PromptBuilder:
         if user.strip():
             layers.append(("用户偏好", user.strip()))
 
-        # Layer 4 — 记忆快照（可选）
+        # Layer 4 — 持久记忆（可选）
         if memory.strip():
-            layers.append(("记忆快照", memory.strip()))
+            layers.append(("持久记忆", memory.strip()))
 
-        # Layer 5 — 项目上下文（可选）
+        # Layer 5 — 历史会话摘要（可选）
+        if episodic.strip():
+            layers.append(("历史会话摘要", episodic.strip()))
+
+        # Layer 6 — 当前会话笔记（可选）
+        if working:
+            lines = [f"- {k}: {v}" for k, v in working.items()]
+            layers.append(("当前会话笔记", "\n".join(lines)))
+
+        # Layer 7 — 项目上下文（可选）
         if context_files:
             parts = []
             for _path, rel, content in context_files:
                 parts.append(f"文件：{rel}\n{content}")
             layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
 
-        # Layer 6 — 工具规则（可选）
+        # Layer 8 — 工具规则（可选）
         if tool_defs:
             layers.append(("工具规则", _format_tool_rules(tool_defs)))
 
-        # Layer 7 — 调用约定（始终存在）
+        # Layer 9 — 调用约定（始终存在）
         layers.append(("调用约定", CONVENTIONS_PROMPT))
 
         if self.verbose and not self._has_verbose_printed:
