@@ -84,7 +84,7 @@ def main():
         return
 
     if args.version:
-        print("chips 0.2.0")
+        print("chips 0.3.0")
         return
 
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -151,7 +151,7 @@ def main():
     memory_snapshot = agent.memory.for_system_prompt() if agent.memory else ""
     memory_lines = len([l for l in memory_snapshot.split("\n") if l.strip()]) if memory_snapshot else 0
     ctx_count = len(agent.context_files)
-    print(f"chips v0.2.0 — model: {args.model}  base_url: {args.base_url}")
+    print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
     print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {memory_lines} 行  |  上下文文件: {ctx_count}")
     print("输入 /help 查看命令, /exit 退出")
 
