@@ -2,13 +2,13 @@
 
 import argparse
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 from agent.loop import AIAgent
 from agent.logger import setup_logging, get_logger
 from agent.prompt import search_context_files
+from config.store import ConfigStore
 from memory.store import MemoryStore
 from session.db import SessionDB
 from tool.registry import registry
@@ -17,31 +17,8 @@ from tool.toolsets import resolve_toolset
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
 
-_CONFIG_PATH = Path.home() / ".chips" / "config.yaml"
 
-
-def _load_config() -> dict:
-    """加载 ~/.chips/config.yaml，不存在时返回空字典。"""
-    if not _CONFIG_PATH.exists():
-        return {}
-    try:
-        import yaml
-        with open(_CONFIG_PATH) as f:
-            cfg: dict = yaml.safe_load(f) or {}
-        return cfg
-    except Exception:
-        return {}
-
-
-def main():
-    load_dotenv()
-
-    # 加载 ~/.chips/config.yaml，仅当对应环境变量未设置时生效
-    cfg = _load_config()
-    for key, env_name in [("model", "CHIPS_MODEL"), ("base_url", "CHIPS_BASE_URL")]:
-        if key in cfg and not os.getenv(env_name):
-            os.environ[env_name] = str(cfg[key])
-
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chips6",
         description="A general-purpose agent harness",
@@ -61,7 +38,50 @@ def main():
                         help="执行环境: local（本地）或 docker（容器沙盒）")
     parser.add_argument("--docker-image", default="alpine:latest",
                         help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
+
+    # 子命令：chips config set/get/list
+    subparsers = parser.add_subparsers(dest="command")
+    config_cmd = subparsers.add_parser("config", help="管理配置")
+    config_sub = config_cmd.add_subparsers(dest="config_action", required=True)
+    config_sub.add_parser("list", help="列出所有配置")
+    config_get = config_sub.add_parser("get", help="获取配置值")
+    config_get.add_argument("key", help="配置键名")
+    config_set = config_sub.add_parser("set", help="设置配置值")
+    config_set.add_argument("key", help="配置键名")
+    config_set.add_argument("value", help="配置值")
+
+    # 子命令：chips session list/show/search/delete
+    session_cmd = subparsers.add_parser("session", help="管理会话")
+    session_sub = session_cmd.add_subparsers(dest="session_action", required=True)
+    session_sub.add_parser("list", help="列出最近会话")
+    session_show = session_sub.add_parser("show", help="显示会话详情")
+    session_show.add_argument("session_id", help="会话 ID")
+    session_search = session_sub.add_parser("search", help="全文搜索消息")
+    session_search.add_argument("query", help="搜索关键词")
+    session_delete = session_sub.add_parser("delete", help="删除会话")
+    session_delete.add_argument("session_id", help="会话 ID")
+
+    return parser
+
+
+def main():
+    load_dotenv()
+
+    # 加载 ~/.chips/config.yaml，仅当对应环境变量未设置时生效
+    ConfigStore().apply_to_env()
+
+    parser = _build_parser()
     args = parser.parse_args()
+
+    # ── 子命令处理 ──
+    if args.command == "config":
+        from config.cli import handle_config
+        handle_config(args)
+        return
+    if args.command == "session":
+        from session.cli import handle_session
+        handle_session(args)
+        return
 
     if args.version:
         print("chips 0.2.0")
@@ -131,29 +151,22 @@ def main():
     memory_snapshot = agent.memory.for_system_prompt() if agent.memory else ""
     memory_lines = len([l for l in memory_snapshot.split("\n") if l.strip()]) if memory_snapshot else 0
     ctx_count = len(agent.context_files)
-    print(f"chips v0.1.0 — model: {args.model}  base_url: {args.base_url}")
+    print(f"chips v0.2.0 — model: {args.model}  base_url: {args.base_url}")
     print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {memory_lines} 行  |  上下文文件: {ctx_count}")
     print("输入 /help 查看命令, /exit 退出")
 
-    # 交互式 REPL：每次输入触发一次 LLM 对话
-    while True:
-        try:
-            text = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+    from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
+    from agent.repl_prompt_toolkit import PromptToolkitInputBackend
 
-        if not text:
-            continue
-        if text == "/exit":
-            break
-        if text == "/help":
-            print("命令: /exit 退出  /help 帮助")
-            continue
+    cmd_reg = CommandRegistry()
 
-        reply = agent.run_conversation(text)
-        if reply:
-            print(reply)
+    loop = ReplLoop(
+        agent=agent,
+        input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
+        output_backend=StdioOutputBackend(),
+        cmd_registry=cmd_reg,
+    )
+    loop.run()
 
 
 if __name__ == "__main__":

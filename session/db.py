@@ -157,8 +157,10 @@ class SessionDB:
     # ── Search ──
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
-        """全文搜索消息内容，返回匹配的消息及其会话信息。"""
-        # FTS5 要求转义特殊字符
+        """全文搜索消息内容，返回匹配的消息及其会话信息。
+
+        优先使用 FTS5，无结果时降级到 LIKE（处理中文等 unicode61 无法正确分词的语言）。
+        """
         q = " OR ".join(query.strip().split())
         with self._connect() as conn:
             rows = conn.execute(
@@ -171,6 +173,21 @@ class SessionDB:
                 "ORDER BY rank LIMIT ?",
                 (q, limit),
             ).fetchall()
+
+        if not rows:
+            # FTS5 未命中时回退 LIKE（兼容 CJK 等非 ASCII 文本）
+            like_q = f"%{query}%"
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT m.session_id, s.title AS session_title, "
+                    "m.role, m.content, m.created_at "
+                    "FROM messages m "
+                    "JOIN sessions s ON m.session_id = s.id "
+                    "WHERE m.content LIKE ? "
+                    "ORDER BY m.created_at DESC LIMIT ?",
+                    (like_q, limit),
+                ).fetchall()
+
         return [dict(r) for r in rows]
 
     # ── Helpers ──

@@ -6,6 +6,9 @@ __pycache__/
 # 运行时数据
 .chips/
 .memory/
+
+# SessionDB 测试遗留
+:memory:
 log/*.log
 log/debug/
 log/llm_*.md
