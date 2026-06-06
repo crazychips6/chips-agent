@@ -1,3 +1,3 @@
 # memory — 记忆系统
-# 双文件冻结快照 + 原子写，提供持久化记忆的读写能力。
-# 零内部依赖。
+# 三级存储（working/episodic/semantic）+ 可切换检索策略。
+# 子模块之间不互相依赖，统一由 store.MemoryStore 编排。

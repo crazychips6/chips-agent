@@ -64,6 +64,57 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_memory(api_key: str | None = None) -> MemoryStore | None:
+    """构建记忆子系统（embedding / vector / retrieval 按需串联）。
+
+    优先级链（MemoryStore.prefetch）：
+      1. retrieval_strategy.search(query)    ← 策略优先
+      2. embedding_service + vector_store    ← 纯 dense 检索
+      3. 文件快照全量返回                    ← 兜底
+    """
+    memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")
+
+    # ── 1. 构建 retrieval 策略（方案 A: FTS5+权重+衰减） ──
+    retrieval_strategy = None
+    retrieval_mode = os.getenv("CHIPS_RETRIEVAL", "fts5")
+    if retrieval_mode == "fts5":
+        from memory.retrieval import FTS5WeightedRetrieval
+
+        retrieval_strategy = FTS5WeightedRetrieval(
+            db_path=os.getenv("CHIPS_RETRIEVAL_DB", os.path.join(memory_dir, "retrieval.db")),
+            weight_factor=float(os.getenv("CHIPS_RETRIEVAL_WEIGHT_FACTOR", "0.5")),
+            decay_half_life=float(os.getenv("CHIPS_RETRIEVAL_DECAY_HALF_LIFE", "30.0")),
+        )
+    # retrieval_mode == "hybrid" → 方案 B 预留，待实现
+
+    # ── 2. 构建 embedding 服务（有 API key 时作为 dense 兜底） ──
+    embedding_service = None
+    vector_store = None
+    embed_api_key = os.getenv("OPENAI_API_KEY") or api_key
+    if embed_api_key:
+        from memory.embedding import OpenAIEmbedding
+
+        embedding_service = OpenAIEmbedding(
+            api_key=embed_api_key,
+            base_url=os.getenv("CHIPS_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
+            model=os.getenv("CHIPS_EMBEDDING_MODEL", "text-embedding-3-small"),
+        )
+
+    if embedding_service:
+        from memory.vector import VectorStore
+
+        vector_store = VectorStore(
+            db_path=os.getenv("CHIPS_VECTOR_DB", os.path.join(memory_dir, "vectors.db"))
+        )
+
+    return MemoryStore(
+        memory_dir=memory_dir,
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+        retrieval_strategy=retrieval_strategy,
+    )
+
+
 def main():
     load_dotenv()
 
@@ -109,31 +160,7 @@ def main():
         # 合并 memory 工具集，默认启用记忆
         agent.tool_names |= resolve_toolset("memory") & registry.tool_names
 
-        embedding_service = None
-        vector_store = None
-        # B3: 尝试初始化 embedding 服务（需要额外的 API key）
-        embed_api_key = os.getenv("OPENAI_API_KEY") or api_key
-        embed_base_url = os.getenv("CHIPS_EMBEDDING_BASE_URL", "https://api.openai.com/v1")
-        if embed_api_key:
-            try:
-                from memory.embedding import OpenAIEmbedding
-                embedding_service = OpenAIEmbedding(
-                    api_key=embed_api_key,
-                    base_url=embed_base_url,
-                    model=os.getenv("CHIPS_EMBEDDING_MODEL", "text-embedding-3-small"),
-                )
-            except Exception:
-                pass  # embedding 不可用不影响主流程
-
-        if embedding_service:
-            from memory.vector import VectorStore
-            vector_store = VectorStore(db_path=".memory/vectors.db")
-
-        memory_store = MemoryStore(
-            memory_dir=".memory",
-            embedding_service=embedding_service,
-            vector_store=vector_store,
-        )
+        memory_store = _build_memory(api_key=api_key)
         agent.memory = memory_store
         memory_tool._store = memory_store
 

@@ -67,18 +67,30 @@ class MemoryStore:
             os.unlink(tmp)
             raise
 
-    def for_system_prompt(self) -> str:
-        """返回持久化快照文本（仅 semantic + episodic），供 PromptBuilder 注入。
+    def get_context(self, query: str | None = None) -> dict:
+        """单一入口：返回四段记忆内容，供 PromptBuilder.build() 消费。
 
-        如果配置了 embedding_service，推荐使用 prefetch() 替代此方法，
-        以获取与当前上下文最相关的记忆而非全部。"""
+        - memory: query 非空时走 prefetch（策略/embedding/快照），否则全量快照
+        - user / episodic: 始终全量快照（量小，不需要检索）
+        - working: 内存中的工作记忆
+        """
+        return {
+            "memory": self.prefetch(query) if query else self._snapshot.get("memory", ""),
+            "user": self._snapshot.get("user", ""),
+            "episodic": self._snapshot.get("episodic", ""),
+            "working": dict(self._working) if self._working else None,
+        }
+
+    def for_system_prompt(self) -> str:
+        """Deprecated: 使用 get_context() 替代。保留向后兼容。"""
+        ctx = self.get_context()
         parts = []
-        if self._snapshot.get("memory"):
-            parts.append(f"## 持久记忆\n{self._snapshot['memory']}")
-        if self._snapshot.get("user"):
-            parts.append(f"## 关于用户\n{self._snapshot['user']}")
-        if self._snapshot.get("episodic"):
-            parts.append(f"## 历史会话摘要\n{self._snapshot['episodic']}")
+        if ctx["memory"]:
+            parts.append(f"## 持久记忆\n{ctx['memory']}")
+        if ctx["user"]:
+            parts.append(f"## 关于用户\n{ctx['user']}")
+        if ctx["episodic"]:
+            parts.append(f"## 历史会话摘要\n{ctx['episodic']}")
         return "\n\n".join(parts)
 
     def get_all(self) -> dict[str, str]:
@@ -91,11 +103,11 @@ class MemoryStore:
     # ── B3/B4: 检索（优先用 retrieval_strategy，降级到 embedding+vector，最后文件快照） ──
 
     def prefetch(self, query: str, top_k: int = 5) -> str:
-        """根据当前查询文本，检索最相关的记忆。
+        """根据查询文本检索最相关的记忆，返回格式化文本。
 
         优先级：
-          1. retrieval_strategy（如 FTS5WeightedRetrieval / HybridRetrieval）
-          2. embedding_service + vector_store（纯 dense 向量检索）
+          1. retrieval_strategy（如 FTS5WeightedRetrieval）
+          2. embedding_service + vector_store（纯 dense 检索）
           3. 文件快照全量返回（降级）
         """
         # 策略优先
@@ -103,7 +115,7 @@ class MemoryStore:
             try:
                 results = self._retrieval_strategy.search(query, top_k=top_k)
                 if results:
-                    lines = ["（根据当前上下文检索到的相关记忆）"]
+                    lines = []
                     for r in results:
                         score = r.get("score", 0)
                         if score > 0.3:
@@ -121,7 +133,7 @@ class MemoryStore:
                 if not results:
                     results = self._vector_store.search("episodic", emb, top_k=top_k)
                 if results:
-                    lines = ["（根据当前上下文检索到的相关记忆）"]
+                    lines = []
                     for r in results:
                         label = r.get("metadata", {}).get("source", "记忆")
                         score = r.get("score", 0)

@@ -302,15 +302,10 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
         # system prompt 每次重新构建
-        memory_data = self.memory.get_all() if self.memory else {}
         tool_defs = self.registry.get_definitions(self.tool_names) if self.registry else []
-        # B3: 使用向量检索获取与当前消息相关的记忆，而非全量注入
-        retrieved = self.memory.prefetch(user_message) if self.memory else ""
+        memory_ctx = self.memory.get_context(query=user_message) if self.memory else {}
         system = self.prompt_builder.build(
-            memory=retrieved or memory_data.get("memory", ""),
-            user=memory_data.get("user", ""),
-            episodic=memory_data.get("episodic", ""),
-            working=memory_data.get("working") if self.memory else None,
+            **memory_ctx,
             context_files=self.context_files,
             tool_defs=tool_defs,
         )

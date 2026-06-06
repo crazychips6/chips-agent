@@ -172,6 +172,52 @@ class TestPrefetch:
         result = store.prefetch("查询")
         assert "出错也有降级" in result
 
+    def test_prefetch_no_prefix_header(self, store):
+        """prefetch 不再自带自然语言前缀头。"""
+        store.add("content", category="memory")
+        result = store.prefetch("content")
+        # 结果不应含 "根据当前上下文检索" 之类的头
+        assert "检索到" not in result
+        assert "相关记忆" not in result
+
+
+class TestGetContext:
+    def test_get_context_returns_all_keys(self, store):
+        ctx = store.get_context()
+        assert set(ctx.keys()) == {"memory", "user", "episodic", "working"}
+
+    def test_get_context_without_query_returns_snapshot(self, store):
+        store.add("snapshot content", category="memory")
+        ctx = store.get_context()
+        assert "snapshot content" in ctx["memory"]
+
+    def test_get_context_with_query_calls_prefetch(self, store):
+        store.add("prefetch content", category="memory")
+        ctx = store.get_context(query="prefetch")
+        assert "prefetch content" in ctx["memory"]
+
+    def test_get_context_returns_user_and_episodic(self, store):
+        store.add("user info", category="user")
+        store.add("session summary", category="episodic")
+        ctx = store.get_context()
+        assert "user info" in ctx["user"]
+        assert "session summary" in ctx["episodic"]
+
+    def test_get_context_working_is_dict_or_none(self, store):
+        ctx = store.get_context()
+        # 没有工作记忆时为 None
+        assert ctx["working"] is None
+
+        store.add("key: val", category="working")
+        ctx = store.get_context()
+        assert ctx["working"] == {"key": "val"}
+
+    def test_get_context_query_none_equals_no_query(self, store):
+        store.add("memory content", category="memory")
+        ctx_none = store.get_context(query=None)
+        ctx_noarg = store.get_context()
+        assert ctx_none == ctx_noarg
+
 
 class TestAutoEmbed:
     def test_add_memory_triggers_auto_embed(self):

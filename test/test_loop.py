@@ -104,10 +104,7 @@ class TestRunConversation:
         ]
         agent.tool_names = {"echo"}
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {
-            "memory": "项目记忆",
-            "user": "用户偏好",
-        }
+        agent.memory.get_context.return_value = {"memory": "项目记忆", "user": "用户偏好", "episodic": "", "working": None}
         agent.context_files = [("/a", "CHIP.md", "# 项目说明")]
 
         agent.run_conversation("hi")
@@ -130,8 +127,7 @@ class TestRunConversation:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
-        agent.memory.prefetch.return_value = ""
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
         agent.context_files = []
 
         agent.run_conversation("hi")
@@ -181,7 +177,7 @@ class TestRunConversation:
         ]
         agent.tool_names = {"echo"}
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         reply = agent.run_conversation("echo ping")
         assert reply == "pong"
@@ -206,7 +202,7 @@ class TestRunConversation:
         ]
         agent.tool_names = {"echo"}
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         reply = agent.run_conversation("start", max_iterations=3)
         assert "最大迭代次数" in reply
@@ -241,7 +237,7 @@ class TestVisionCapability:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         agent.messages.append({
             "role": "user",
@@ -270,7 +266,7 @@ class TestVisionCapability:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         agent.messages.append({
             "role": "user",
@@ -299,7 +295,7 @@ class TestVisionCapability:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         reply = agent.run_conversation("hi")
         assert reply == "你好"
@@ -346,7 +342,7 @@ class TestImageInjection:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         agent.run_conversation("hi")
         # 不应注入 user message
@@ -383,7 +379,7 @@ class TestImageInjection:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         # mock dispatch 返回截图路径
         agent.registry.dispatch.return_value = f"截图已保存到 {img}（使用 mock）"
@@ -473,7 +469,7 @@ class TestToolLoopDetection:
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         agent.run_conversation("hi")
         # 上一轮如果有工具循环，新对话不应继承
@@ -504,7 +500,7 @@ class TestMaxIterationsWithText:
         agent.registry.get_definitions.return_value = [{"function": {"name": "echo"}}]
         agent.tool_names = {"echo"}
         agent.memory = MagicMock()
-        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.get_context.return_value = {"memory": "", "user": "", "episodic": "", "working": None}
 
         reply = agent.run_conversation("start", max_iterations=3)
         assert "最大迭代次数" in reply
