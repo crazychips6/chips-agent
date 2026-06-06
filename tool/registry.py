@@ -16,7 +16,7 @@ from threading import RLock
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chips.tool.registry")
 
 # check_fn 结果的缓存秒数，避免每次 get_definitions 都重新执行昂贵的检查
 _CHECK_FN_TTL = 30.0

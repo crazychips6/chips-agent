@@ -30,7 +30,7 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chips.memory.holographic.hrr")
 
 _TWO_PI = 2.0 * math.pi
 

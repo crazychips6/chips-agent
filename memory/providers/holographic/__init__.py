@@ -19,7 +19,7 @@ from memory.provider import MemoryProvider
 from .store import MemoryStore as HolographicStore
 from .retrieval import FactRetriever
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chips.memory.holographic")
 
 FACT_STORE_SCHEMA: dict = {
     "name": "fact_store",

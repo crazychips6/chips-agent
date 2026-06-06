@@ -12,7 +12,7 @@ from typing import Any
 
 from memory.provider import MemoryProvider
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("chips.memory.manager")
 
 
 class MemoryManager:

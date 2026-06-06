@@ -20,7 +20,7 @@ _SURROGATE_RE = re.compile('[\ud800-\udfff]')
 def _sanitize(text: str) -> str:
     return _SURROGATE_RE.sub("", text)
 
-logger = logging.getLogger("chips")
+logger = logging.getLogger("chips.agent.loop")
 
 from agent.message import ImageBlock, TextBlock, image_file_to_data_uri, parse_user_content, to_openai_messages
 from agent.prompt import PromptBuilder
