@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agent.loop import AIAgent
-from memory.store import MemoryStore
+from memory.manager import MemoryManager
+from memory.providers.builtin import BuiltinMemoryProvider
 from tool.registry import ToolRegistry
 from tool.toolsets import resolve_toolset
 
@@ -18,8 +19,6 @@ def clean_registry():
     """提供干净 registry，测试后清理注册的工具。"""
     r = ToolRegistry()
     r.register(name="echo", toolset="core", handler=lambda args: args.get("text", ""))
-    r.register(name="memory_read", toolset="memory", handler=lambda _: "read ok")
-    r.register(name="memory_write", toolset="memory", handler=lambda _: "write ok")
     return r
 
 
@@ -43,21 +42,21 @@ class TestAgentWiring:
     """模拟 CLI 的 wiring 流程，验证 agent 状态和 prompt 结果。"""
 
     def test_full_wiring(self, clean_registry, mock_openai, tmp_path):
-        """完整链路：registry + tools + memory + context → 7 层 prompt。"""
+        """完整链路：registry + tools + MemoryManager + context → 7 层 prompt。"""
         agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
         agent.registry = clean_registry
 
         # 注入 toolset
         agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
 
-        # 注入 memory
+        # 注入 MemoryManager + BuiltinMemoryProvider
         mem_dir = str(tmp_path / ".memory")
-        memory_store = MemoryStore(memory_dir=mem_dir)
-        memory_store.add("项目记忆", category="memory")
-        memory_store.add("用户喜欢 Python", category="user")
-        agent.memory = memory_store
-        import tool.builtins.memory as memory_tool
-        memory_tool._store = memory_store
+        mm = MemoryManager()
+        mm.add_provider(BuiltinMemoryProvider(memory_dir=mem_dir))
+        # 预写入记忆（通过 provider 的 handle_tool_call）
+        mm.handle_tool_call("memory", {"action": "add", "target": "memory", "content": "项目记忆"})
+        mm.handle_tool_call("memory", {"action": "add", "target": "user", "content": "用户喜欢 Python"})
+        agent.memory_manager = mm
 
         # 注入 context 文件
         ctx_file = tmp_path / "CHIP.md"
@@ -71,7 +70,7 @@ class TestAgentWiring:
         call_kwargs = mock_openai.chat.completions.create.call_args[1]
         system = call_kwargs["messages"][0]["content"]
 
-        layers = ["核心身份", "当前日期", "用户偏好", "持久记忆",
+        layers = ["核心身份", "当前日期", "持久记忆",
                    "项目上下文", "工具规则", "调用约定"]
         for layer in layers:
             assert f"# {layer}" in system, f"缺少层: {layer}"
@@ -122,7 +121,7 @@ class TestToolsetAndMemoryWiring:
     """验证 toolset 解析 + memory wiring 的组合逻辑。"""
 
     def test_tool_names_after_wiring(self, clean_registry):
-        """注入 core + memory 后 tool_names 内容正确。"""
+        """注入 core 后 tool_names 内容正确。"""
         agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
         agent.registry = clean_registry
 
@@ -130,14 +129,9 @@ class TestToolsetAndMemoryWiring:
         agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
         assert agent.tool_names == {"echo"}
 
-        # 再追加 memory 工具集
-        agent.tool_names |= resolve_toolset("memory") & clean_registry.tool_names
-        assert agent.tool_names == {"echo", "memory_read", "memory_write"}
-
     def test_tool_names_core_only(self, clean_registry):
         """只加载 core 工具集。"""
         agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
         agent.registry = clean_registry
         agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
         assert agent.tool_names == {"echo"}
-        assert "memory_read" not in agent.tool_names

@@ -1,3 +1,4 @@
 # memory — 记忆系统
-# 三级存储（working/episodic/semantic）+ 可切换检索策略。
-# 子模块之间不互相依赖，统一由 store.MemoryStore 编排。
+# 文件级持久记忆（MEMORY.md / USER.md / EPISODIC.md）。
+# 初始化时读入全部内容供 system prompt 注入，通过 memory 工具（add/replace/remove）写入。
+# 零内部依赖。

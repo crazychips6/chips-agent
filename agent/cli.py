@@ -9,7 +9,8 @@ from agent.loop import AIAgent
 from agent.logger import setup_logging, get_logger
 from agent.prompt import search_context_files
 from config.store import ConfigStore
-from memory.store import MemoryStore
+from memory.manager import MemoryManager
+from memory.providers.builtin import BuiltinMemoryProvider
 from session.db import SessionDB
 from tool.registry import registry
 from tool.toolsets import resolve_toolset
@@ -30,6 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--debug-context", action="store_true", help="将每轮 LLM 请求/响应写入 log/debug/session.json")
     parser.add_argument("--toolset", default="core", help="使用的工具集，默认 core")
     parser.add_argument("--no-memory", action="store_true", help="禁用记忆系统")
+    parser.add_argument("--holographic", action="store_true", help="启用 Holographic 记忆（SQLite 事实存储 + 语义检索）")
     parser.add_argument("--verbose", action="store_true", help="显示 system prompt 各层详情")
     parser.add_argument("--resume", nargs="?", const=True, default=False,
                         help="恢复上次会话，或指定 session_id 恢复特定会话")
@@ -64,55 +66,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_memory(api_key: str | None = None) -> MemoryStore | None:
-    """构建记忆子系统（embedding / vector / retrieval 按需串联）。
-
-    优先级链（MemoryStore.prefetch）：
-      1. retrieval_strategy.search(query)    ← 策略优先
-      2. embedding_service + vector_store    ← 纯 dense 检索
-      3. 文件快照全量返回                    ← 兜底
-    """
+def _build_memory_manager(holographic: bool = False) -> MemoryManager | None:
+    """构建记忆子系统（MemoryManager + BuiltinMemoryProvider + 可选 Holographic）。"""
     memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")
-
-    # ── 1. 构建 retrieval 策略（方案 A: FTS5+权重+衰减） ──
-    retrieval_strategy = None
-    retrieval_mode = os.getenv("CHIPS_RETRIEVAL", "fts5")
-    if retrieval_mode == "fts5":
-        from memory.retrieval import FTS5WeightedRetrieval
-
-        retrieval_strategy = FTS5WeightedRetrieval(
-            db_path=os.getenv("CHIPS_RETRIEVAL_DB", os.path.join(memory_dir, "retrieval.db")),
-            weight_factor=float(os.getenv("CHIPS_RETRIEVAL_WEIGHT_FACTOR", "0.5")),
-            decay_half_life=float(os.getenv("CHIPS_RETRIEVAL_DECAY_HALF_LIFE", "30.0")),
-        )
-    # retrieval_mode == "hybrid" → 方案 B 预留，待实现
-
-    # ── 2. 构建 embedding 服务（有 API key 时作为 dense 兜底） ──
-    embedding_service = None
-    vector_store = None
-    embed_api_key = os.getenv("OPENAI_API_KEY") or api_key
-    if embed_api_key:
-        from memory.embedding import OpenAIEmbedding
-
-        embedding_service = OpenAIEmbedding(
-            api_key=embed_api_key,
-            base_url=os.getenv("CHIPS_EMBEDDING_BASE_URL", "https://api.openai.com/v1"),
-            model=os.getenv("CHIPS_EMBEDDING_MODEL", "text-embedding-3-small"),
-        )
-
-    if embedding_service:
-        from memory.vector import VectorStore
-
-        vector_store = VectorStore(
-            db_path=os.getenv("CHIPS_VECTOR_DB", os.path.join(memory_dir, "vectors.db"))
-        )
-
-    return MemoryStore(
-        memory_dir=memory_dir,
-        embedding_service=embedding_service,
-        vector_store=vector_store,
-        retrieval_strategy=retrieval_strategy,
-    )
+    mm = MemoryManager()
+    mm.add_provider(BuiltinMemoryProvider(memory_dir=memory_dir))
+    if holographic:
+        from memory.providers.holographic import HolographicMemoryProvider
+        mm.add_provider(HolographicMemoryProvider())
+    return mm
 
 
 def main():
@@ -155,14 +117,7 @@ def main():
         agent.context_files = context_files
 
     if not args.no_memory:
-        import tool.builtins.memory as memory_tool
-
-        # 合并 memory 工具集，默认启用记忆
-        agent.tool_names |= resolve_toolset("memory") & registry.tool_names
-
-        memory_store = _build_memory(api_key=api_key)
-        agent.memory = memory_store
-        memory_tool._store = memory_store
+        agent.memory_manager = _build_memory_manager(holographic=args.holographic)
 
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env
@@ -199,11 +154,13 @@ def main():
             print(reply)
         return
 
-    memory_snapshot = agent.memory.for_system_prompt() if agent.memory else ""
-    memory_lines = len([l for l in memory_snapshot.split("\n") if l.strip()]) if memory_snapshot else 0
     ctx_count = len(agent.context_files)
+    mem_status = "off"
+    if agent.memory_manager:
+        provider_names = [p.name for p in agent.memory_manager.providers]
+        mem_status = "+".join(provider_names)
     print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {memory_lines} 行  |  上下文文件: {ctx_count}")
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}")
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend

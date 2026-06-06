@@ -293,7 +293,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "获取网页内容，返回纯文本。自动提取 HTML 正文、跳过内网地址、限制响应大小为 5MB。",
+            "description": "【成本：1 步】获取网页内容，返回纯文本。自动提取 HTML 正文、跳过内网地址、限制响应大小为 5MB。如果已知 URL 应优先使用此工具，比 web_search 更高效。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -316,7 +316,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "搜索互联网，返回标题、链接和摘要。使用 DuckDuckGo 搜索，无需配置 API Key。",
+            "description": "【成本：2 步】搜索互联网，返回标题、链接和摘要。使用 收费api 搜索。仅在不知道具体 URL 时使用；如果已知 URL 应使用 web_fetch（成本更低）。",
             "parameters": {
                 "type": "object",
                 "properties": {

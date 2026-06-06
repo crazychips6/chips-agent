@@ -30,16 +30,6 @@ class TestRegistryToolsetConsistency:
         missing = registered_core - core_tools
         assert not missing, f"已注册 core 但不在 TOOLSETS 中: {missing}"
 
-    def test_memory_tools_all_registered(self):
-        """memory toolset 中的工具都已注册。"""
-        import tool.builtins  # noqa: F401
-        from tool.registry import registry
-
-        memory_tools = resolve_toolset("memory")
-        registered = set(registry._entries.keys())
-        missing = memory_tools - registered
-        assert not missing, f"memory TOOLSETS 但未注册: {missing}"
-
     def test_all_tools_in_all_toolset_registered(self):
         """递归展开 all 工具集，所有工具都已注册。"""
         import tool.builtins  # noqa: F401

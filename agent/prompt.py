@@ -1,8 +1,8 @@
-"""PromptBuilder — 7 层 System Prompt 组装器
+"""PromptBuilder — System Prompt 组装器
 
 层次结构：
-  (1) 核心身份  (2) 当前日期  (3) 用户偏好  (4) 记忆快照
-  (5) 项目上下文  (6) 工具规则  (7) 调用约定
+  (1) 核心身份  (2) 当前日期  (3) 用户偏好  (4) 持久记忆
+  (5) 历史会话摘要  (6) 项目上下文  (7) 工具规则  (8) 调用约定
 
 辅助功能：
   - search_context_files()  从 CWD 向上搜索 CLAUDE.md 等上下文文件
@@ -153,7 +153,7 @@ class PromptBuilder:
         memory: str = "",
         user: str = "",
         episodic: str = "",
-        working: dict[str, str] | None = None,
+        memory_prompt: str = "",  # 从 MemoryManager 注入（优先于上面三个）
         context_files: list[tuple[str, str, str]] | None = None,
         tool_defs: list[dict] | None = None,
     ) -> str:
@@ -165,35 +165,30 @@ class PromptBuilder:
         # Layer 2 — 当前日期（始终存在）
         layers.append(("当前日期", f"当前日期：{datetime.date.today()}"))
 
-        # Layer 3 — 用户偏好（可选）
-        if user.strip():
-            layers.append(("用户偏好", user.strip()))
+        if memory_prompt:
+            # MemoryManager 模式：单个块包含所有提供者内容
+            layers.append(("持久记忆", memory_prompt.strip()))
+        else:
+            # 传统模式：三段分离
+            if user.strip():
+                layers.append(("用户偏好", user.strip()))
+            if memory.strip():
+                layers.append(("持久记忆", memory.strip()))
+            if episodic.strip():
+                layers.append(("历史会话摘要", episodic.strip()))
 
-        # Layer 4 — 持久记忆（可选）
-        if memory.strip():
-            layers.append(("持久记忆", memory.strip()))
-
-        # Layer 5 — 历史会话摘要（可选）
-        if episodic.strip():
-            layers.append(("历史会话摘要", episodic.strip()))
-
-        # Layer 6 — 当前会话笔记（可选）
-        if working:
-            lines = [f"- {k}: {v}" for k, v in working.items()]
-            layers.append(("当前会话笔记", "\n".join(lines)))
-
-        # Layer 7 — 项目上下文（可选）
+        # Layer 6 — 项目上下文（可选）
         if context_files:
             parts = []
             for _path, rel, content in context_files:
                 parts.append(f"文件：{rel}\n{content}")
             layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
 
-        # Layer 8 — 工具规则（可选）
+        # Layer 7 — 工具规则（可选）
         if tool_defs:
             layers.append(("工具规则", _format_tool_rules(tool_defs)))
 
-        # Layer 9 — 调用约定（始终存在）
+        # Layer 8 — 调用约定（始终存在）
         layers.append(("调用约定", CONVENTIONS_PROMPT))
 
         if self.verbose and not self._has_verbose_printed:

@@ -18,7 +18,7 @@ import sys
 from safety.allowlist import check as allowlist_check, add as allowlist_add
 from safety.audit import log_event
 
-logger = logging.getLogger("chips")
+logger = logging.getLogger(__name__)
 
 
 class ApprovalAction(Enum):

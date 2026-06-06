@@ -5,7 +5,6 @@ agent/cli.py 中 import tool.builtins 即可完成所有内置工具注册，
 agent 代码无需直接引用任何具体工具实现。"""
 
 import tool.builtins.echo      # noqa: F401
-import tool.builtins.memory    # noqa: F401
 import tool.builtins.terminal  # noqa: F401
 import tool.builtins.file      # noqa: F401
 import tool.builtins.web       # noqa: F401

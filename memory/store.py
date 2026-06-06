@@ -1,245 +1,224 @@
-"""MemoryStore — 三级记忆存储 (working / episodic / semantic)
+"""MemoryStore — 文件级持久记忆（Hermes 风格）
 
-三层模型：
-- Working（工作记忆）：当前会话的结构化笔记，内存中，不清除不持久
-- Episodic（情景记忆）：历史会话摘要，持久化到 EPISODIC.md，跨会话
-- Semantic（语义记忆）：持久知识，MEMORY.md + USER.md，永久
+三级存储：
+  - memory:   MEMORY.md   agent 的持久笔记
+  - user:     USER.md     关于用户的持久信息
+  - episodic: EPISODIC.md 历史会话摘要（带时间戳）
 
-B3：新增向量检索，取代全量 memory 注入 system prompt。
-add() 时自动 embed 并存入 vector store（需配置 embedding_service）。
-prefetch(query) 返回与当前上下文最相关的 top-k 条记忆。
+初始化时全部读入内存。get_memory/get_user/get_episodic 返回当前内容供 system prompt。
+写入通过 add()/replace()/remove()，每次写后同步磁盘，返回完整条目列表 + 使用量统计。
 
-B4：可切换的 RetrievalStrategy，方案 A = FTS5+权重+衰减，方案 B = hybrid（扩展点）。"""
-
-from __future__ import annotations
+零内部依赖。"""
 
 import datetime
 import os
+import re
 import tempfile
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from memory.embedding import EmbeddingProtocol
-    from memory.retrieval import RetrievalStrategy
-    from memory.vector import VectorStore
+ENTRY_DELIMITER = "\n§\n"
+
+# ── 注入检测 ──
+
+_INJECTION_PATTERNS: list[tuple[str, str]] = [
+    (r"ignore\s+(all\s+)?(previous|above|prior)\s+(instructions|directives|commands|rules)", "prompt_injection"),
+    (r"you\s+are\s+(now\s+)?(a\s+)?(new\s+)?(system|assistant)", "role_hijack"),
+    (r"(forget|disregard)\s+(all\s+)?(previous|prior)\s+(instructions|directives|rules)", "forget_instruction"),
+    (r"system\s*(prompt\s*)?(override|reset)", "sys_override"),
+]
+
+_INVISIBLE_CHARS = {
+    "​", "‌", "‍", "⁠", "﻿",
+    "‪", "‫", "‬", "‭", "‮",
+}
+
+
+def _scan_injection(content: str) -> str | None:
+    for char in _INVISIBLE_CHARS:
+        if char in content:
+            return f"内容包含不可见 Unicode 字符 U+{ord(char):04X}"
+    for pattern, pid in _INJECTION_PATTERNS:
+        if re.search(pattern, content, re.IGNORECASE):
+            return f"内容匹配威胁模式 '{pid}'"
+    return None
 
 
 class MemoryStore:
+    SNAPSHOT_KEYS = ("memory", "user", "episodic")
+
     def __init__(self, memory_dir: str,
-                 embedding_service: EmbeddingProtocol | None = None,
-                 vector_store: VectorStore | None = None,
-                 retrieval_strategy: RetrievalStrategy | None = None):
+                 memory_char_limit: int = 2200,
+                 user_char_limit: int = 1375):
         os.makedirs(memory_dir, exist_ok=True)
-        self._memory_dir = memory_dir
-        self._memory_file = os.path.join(memory_dir, "MEMORY.md")
-        self._user_file = os.path.join(memory_dir, "USER.md")
-        self._episodic_file = os.path.join(memory_dir, "EPISODIC.md")
-        # 工作记忆：仅内存，不持久化
-        self._working: dict[str, str] = {}
-        # 初始化时冻结快照
-        self._snapshot = self._read_all()
-        # B3: 可选的 embedding 服务 + 向量存储
-        self._embedding = embedding_service
-        self._vector_store = vector_store
-        # B4: 可切换的检索策略（优先于 embedding+vector）
-        self._retrieval_strategy = retrieval_strategy
+        self._dir = memory_dir
+        self._limits = {"memory": memory_char_limit, "user": user_char_limit, "episodic": 0}
+        self._files = {k: os.path.join(memory_dir, f"{k.upper()}.md") for k in self.SNAPSHOT_KEYS}
+        self._entries: dict[str, list[str]] = {k: [] for k in self.SNAPSHOT_KEYS}
+        self._load_all()
 
-    def _read_file(self, path: str) -> str:
-        if os.path.exists(path):
-            with open(path) as f:
-                return f.read().strip()
-        return ""
+    # ── System Prompt 接口 ──
 
-    def _read_all(self) -> dict[str, str]:
-        return {
-            "memory": self._read_file(self._memory_file),
-            "user": self._read_file(self._user_file),
-            "episodic": self._read_file(self._episodic_file),
-        }
+    def get_memory(self) -> str:
+        """MEMORY.md 内容（条目用分隔符连接）。"""
+        return ENTRY_DELIMITER.join(self._entries["memory"])
 
-    def _atomic_write(self, path: str, content: str):
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-            os.replace(tmp, path)
-        except Exception:
-            os.unlink(tmp)
-            raise
+    def get_user(self) -> str:
+        """USER.md 内容。"""
+        return ENTRY_DELIMITER.join(self._entries["user"])
 
-    def get_context(self, query: str | None = None) -> dict:
-        """单一入口：返回四段记忆内容，供 PromptBuilder.build() 消费。
-
-        - memory: query 非空时走 prefetch（策略/embedding/快照），否则全量快照
-        - user / episodic: 始终全量快照（量小，不需要检索）
-        - working: 内存中的工作记忆
-        """
-        return {
-            "memory": self.prefetch(query) if query else self._snapshot.get("memory", ""),
-            "user": self._snapshot.get("user", ""),
-            "episodic": self._snapshot.get("episodic", ""),
-            "working": dict(self._working) if self._working else None,
-        }
+    def get_episodic(self) -> str:
+        """EPISODIC.md 内容。"""
+        return ENTRY_DELIMITER.join(self._entries["episodic"])
 
     def for_system_prompt(self) -> str:
-        """Deprecated: 使用 get_context() 替代。保留向后兼容。"""
-        ctx = self.get_context()
+        """返回三段内容拼合的格式化文本（兼容旧接口 / tool 用）。"""
         parts = []
-        if ctx["memory"]:
-            parts.append(f"## 持久记忆\n{ctx['memory']}")
-        if ctx["user"]:
-            parts.append(f"## 关于用户\n{ctx['user']}")
-        if ctx["episodic"]:
-            parts.append(f"## 历史会话摘要\n{ctx['episodic']}")
+        if self.get_memory():
+            parts.append(f"## 持久记忆\n{self.get_memory()}")
+        if self.get_user():
+            parts.append(f"## 关于用户\n{self.get_user()}")
+        if self.get_episodic():
+            parts.append(f"## 历史会话摘要\n{self.get_episodic()}")
         return "\n\n".join(parts)
 
-    def get_all(self) -> dict[str, str]:
-        """返回全部快照 + 工作记忆。"""
-        return {
-            **dict(self._snapshot),
-            "working": dict(self._working),
-        }
+    # ── 内部 IO ──
 
-    # ── B3/B4: 检索（优先用 retrieval_strategy，降级到 embedding+vector，最后文件快照） ──
+    def _load_all(self):
+        for key in self.SNAPSHOT_KEYS:
+            self._entries[key] = self._read_entries(self._files[key])
 
-    def prefetch(self, query: str, top_k: int = 5) -> str:
-        """根据查询文本检索最相关的记忆，返回格式化文本。
+    @staticmethod
+    def _read_entries(path: str) -> list[str]:
+        if not os.path.exists(path):
+            return []
+        try:
+            raw = open(path, encoding="utf-8").read().strip()
+        except OSError:
+            return []
+        if not raw:
+            return []
+        entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
+        return [e for e in entries if e]
 
-        优先级：
-          1. retrieval_strategy（如 FTS5WeightedRetrieval）
-          2. embedding_service + vector_store（纯 dense 检索）
-          3. 文件快照全量返回（降级）
-        """
-        # 策略优先
-        if self._retrieval_strategy is not None:
+    def _write_entries(self, target: str):
+        content = ENTRY_DELIMITER.join(self._entries[target]) if self._entries[target] else ""
+        path = self._files[target]
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
             try:
-                results = self._retrieval_strategy.search(query, top_k=top_k)
-                if results:
-                    lines = []
-                    for r in results:
-                        score = r.get("score", 0)
-                        if score > 0.3:
-                            label = r.get("category", "记忆")
-                            lines.append(f"- [{label}] {r['text']}")
-                    return "\n".join(lines)
-            except Exception:
-                pass  # 策略失败降级
-
-        # 次优：dense embedding 检索
-        if self._embedding and self._vector_store:
-            try:
-                emb = self._embedding.embed([query])[0]
-                results = self._vector_store.search("memory", emb, top_k=top_k)
-                if not results:
-                    results = self._vector_store.search("episodic", emb, top_k=top_k)
-                if results:
-                    lines = []
-                    for r in results:
-                        label = r.get("metadata", {}).get("source", "记忆")
-                        score = r.get("score", 0)
-                        if score > 0.5:
-                            lines.append(f"- [{label}] {r['text']}")
-                    return "\n".join(lines)
-            except Exception:
+                os.unlink(tmp)
+            except OSError:
                 pass
-
-        # 兜底：全量文件快照
-        return self._snapshot.get("memory", "")
-
-    # ── B3/B4: 自动索引（add 时触发，按 retrieval_strategy → embedding+vector 顺序） ──
-
-    def _auto_index(self, text: str, category: str, metadata: dict | None = None):
-        """将一段文本自动加入检索索引。
-
-        优先级：
-          1. retrieval_strategy.add_text()（如 FTS5WeightedRetrieval）
-          2. embedding_service + vector_store（纯 dense）
-        静默失败（不阻塞主流程）。
-        """
-        if not text.strip():
-            return
-        # 策略优先
-        if self._retrieval_strategy is not None:
-            try:
-                weight = 0.7 if category == "memory" else 0.5
-                meta = dict(metadata or {})
-                meta.setdefault("category", category)
-                meta.setdefault("weight", weight)
-                self._retrieval_strategy.add_text(text, metadata=meta)
-                return
-            except Exception:
-                pass
-        # 降级：dense embedding
-        if self._embedding and self._vector_store:
-            try:
-                emb = self._embedding.embed([text])[0]
-                self._vector_store.add(
-                    namespace=category,
-                    text=text,
-                    embedding=emb,
-                    metadata=metadata or {"source": category},
-                )
-            except Exception:
-                pass
+            raise
 
     # ── CRUD ──
 
-    def add(self, content: str, category: str = "memory") -> dict:
-        """追加一条记忆。
+    def add(self, target: str, content: str) -> dict:
+        """追加条目。返回 {"success", "entries", "usage", "entry_count", "message"}。"""
+        if target not in self.SNAPSHOT_KEYS:
+            return {"success": False, "error": f"未知分类: {target}"}
+        content = content.strip()
+        if not content:
+            return {"success": False, "error": "内容不能为空"}
 
-        支持分类：
-        - "memory" / "user" → 语义记忆，持久化到文件
-        - "episodic" → 情景记忆，追加到 EPISODIC.md
-        - "working" → 工作记忆，仅内存，格式 "key: value"
+        err = _scan_injection(content)
+        if err:
+            return {"success": False, "error": err}
 
-        B3/B4：memory 和 episodic 类别自动加入检索索引。
-        """
-        if category == "working":
-            if ":" in content:
-                key, value = content.split(":", 1)
-                self._working[key.strip()] = value.strip()
-            else:
-                self._working[content] = ""
-            return {"status": "ok", "category": "working"}
-
-        if category == "episodic":
+        if target == "episodic":
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            entry = f"- [{now}] {content}"
-            existing = self._snapshot.get("episodic", "")
-            new_content = existing + "\n" + entry if existing else entry
-            self._atomic_write(self._episodic_file, new_content)
-            self._snapshot["episodic"] = new_content
-            # B3/B4: 自动加入检索索引
-            self._auto_index(entry, category="episodic", metadata={"source": "episodic", "time": now})
-            return {"status": "ok", "category": "episodic"}
+            content = f"[{now}] {content}"
 
-        if category not in ("memory", "user"):
-            return {"status": "error", "message": f"未知分类: {category}"}
+        entries = self._entries[target]
+        if content in entries:
+            return self._success(target, "条目已存在（未重复添加）")
 
-        path = self._memory_file if category == "memory" else self._user_file
-        existing = self._snapshot.get(category, "")
-        new_content = existing + "\n" + content if existing else content
-        self._atomic_write(path, new_content)
-        self._snapshot[category] = new_content
-        # B3/B4: 自动加入检索索引
-        self._auto_index(content, category=category, metadata={"source": category})
-        return {"status": "ok", "category": category, "file": path}
+        limit = self._limits.get(target)
+        if limit:
+            current_total = len(ENTRY_DELIMITER.join(entries)) if entries else 0
+            add_cost = (len(ENTRY_DELIMITER) if entries else 0) + len(content)
+            if current_total + add_cost > limit:
+                return {
+                    "success": False,
+                    "error": f"超出字符限制 ({current_total}/{limit})",
+                    "entries": list(entries),
+                    "usage": f"{current_total}/{limit}",
+                }
 
-    # ── Working Memory 管理 ──
+        entries.append(content)
+        self._write_entries(target)
+        return self._success(target, "已添加")
 
-    def set_working(self, key: str, value: str):
-        self._working[key] = value
+    def replace(self, target: str, old_text: str, new_content: str) -> dict:
+        """替换包含 old_text 的条目。仅支持 memory/user。"""
+        if target not in ("memory", "user"):
+            return {"success": False, "error": f"不支持替换 {target}"}
+        old_text = old_text.strip()
+        new_content = new_content.strip()
+        if not old_text:
+            return {"success": False, "error": "old_text 不能为空"}
+        if not new_content:
+            return {"success": False, "error": "new_content 不能为空"}
 
-    def get_working(self, key: str = "") -> dict | str:
-        if key:
-            return self._working.get(key, "")
-        return dict(self._working)
+        err = _scan_injection(new_content)
+        if err:
+            return {"success": False, "error": err}
 
-    def clear_working(self):
-        self._working.clear()
+        entries = self._entries[target]
+        matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
+        if not matches:
+            return {"success": False, "error": f"未找到包含 '{old_text}' 的条目"}
+        if len(matches) > 1:
+            return {"success": False, "error": "多条条目匹配，请使用更精确的文本"}
 
-    # ── Episodic 管理 ──
+        idx = matches[0][0]
+        entries[idx] = new_content
+        self._write_entries(target)
+        return self._success(target, "已替换")
+
+    def remove(self, target: str, old_text: str) -> dict:
+        """删除包含 old_text 的条目。仅支持 memory/user。"""
+        if target not in ("memory", "user"):
+            return {"success": False, "error": f"不支持删除 {target}"}
+        old_text = old_text.strip()
+        if not old_text:
+            return {"success": False, "error": "old_text 不能为空"}
+
+        entries = self._entries[target]
+        matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
+        if not matches:
+            return {"success": False, "error": f"未找到包含 '{old_text}' 的条目"}
+        if len(matches) > 1:
+            return {"success": False, "error": "多条条目匹配，请使用更精确的文本"}
+
+        idx = matches[0][0]
+        entries.pop(idx)
+        self._write_entries(target)
+        return self._success(target, "已删除")
 
     def summarize_to_episodic(self, summary: str):
-        """将当前会话摘要写入 episodic 记忆。"""
-        self.add(summary, category="episodic")
+        """会话结束自动摘要写入。"""
+        self.add("episodic", summary)
+
+    # ── 响应构建 ──
+
+    def _success(self, target: str, message: str = "") -> dict:
+        entries = list(self._entries[target])
+        total = len(ENTRY_DELIMITER.join(entries)) if entries else 0
+        limit = self._limits.get(target, 0)
+        pct = min(100, int(total / limit * 100)) if limit > 0 else 0
+        usage = f"{pct}% — {total}/{limit} 字符" if limit else f"{total} 字符"
+        resp: dict = {
+            "success": True,
+            "entries": entries,
+            "usage": usage,
+            "entry_count": len(entries),
+        }
+        if message:
+            resp["message"] = message
+        return resp
