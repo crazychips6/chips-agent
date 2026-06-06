@@ -6,6 +6,7 @@ import openai
 import pytest
 
 from agent.loop import AIAgent
+from agent.message import ImageBlock, TextBlock
 
 
 @pytest.fixture
@@ -130,6 +131,7 @@ class TestRunConversation:
         agent.tool_names = set()
         agent.memory = MagicMock()
         agent.memory.get_all.return_value = {"memory": "", "user": ""}
+        agent.memory.prefetch.return_value = ""
         agent.context_files = []
 
         agent.run_conversation("hi")
@@ -229,6 +231,172 @@ class TestConstructor:
     def test_max_retries_default(self):
         agent = AIAgent(api_key="test-key")
         assert agent._max_retries == 3
+
+
+class TestVisionCapability:
+    def test_non_vision_model_rejects_image_block(self, mock_openai):
+        """deepseek-chat 不支持 vision，消息含图片时报错。"""
+        agent = AIAgent(api_key="test-key", model="deepseek-chat")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        agent.messages.append({
+            "role": "user",
+            "content": [
+                TextBlock(text="看图"),
+                ImageBlock(url="https://img.png"),
+            ],
+        })
+
+        with pytest.raises(ValueError, match="不支持 vision"):
+            agent.run_conversation("")
+
+    def test_vision_model_allows_image_block(self, mock_openai):
+        """gpt-4o 支持 vision，消息含图片不报错。"""
+        msg = MagicMock()
+        msg.content = "看到了"
+        msg.reasoning_content = None
+        msg.tool_calls = None
+
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=msg)]
+        )
+
+        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        agent.messages.append({
+            "role": "user",
+            "content": [
+                TextBlock(text="看图"),
+                ImageBlock(url="https://img.png"),
+            ],
+        })
+
+        reply = agent.run_conversation("")
+        assert reply == "看到了"
+
+    def test_non_vision_model_text_only_ok(self, mock_openai):
+        """纯文本消息，非 vision 模型正常通过。"""
+        msg = MagicMock()
+        msg.content = "你好"
+        msg.reasoning_content = None
+        msg.tool_calls = None
+
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=msg)]
+        )
+
+        agent = AIAgent(api_key="test-key", model="deepseek-chat")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        reply = agent.run_conversation("hi")
+        assert reply == "你好"
+
+    def test_is_vision_model_helper(self):
+        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        assert agent._is_vision_model() is True
+        agent.model = "deepseek-chat"
+        assert agent._is_vision_model() is False
+        agent.model = "unknown-model"
+        assert agent._is_vision_model() is False
+
+
+class TestImageInjection:
+    def test_extract_screenshot_path_valid(self, tmp_path):
+        """有效截图路径被正确提取。"""
+        img = tmp_path / "screenshot.png"
+        img.write_text("fake-png-data")
+        result = f"截图已保存到 {img}（使用 ImageMagick import）"
+        extracted = AIAgent._extract_screenshot_path(result)
+        assert extracted == str(img)
+
+    def test_extract_screenshot_path_invalid_prefix(self):
+        """不是截图结果时返回 None。"""
+        assert AIAgent._extract_screenshot_path("some other result") is None
+
+    def test_extract_screenshot_path_file_not_found(self):
+        """文件不存在时返回 None。"""
+        result = "截图已保存到 /nonexistent/path.png（使用 test）"
+        assert AIAgent._extract_screenshot_path(result) is None
+
+    def test_maybe_inject_image_skips_non_screenshot(self, mock_openai):
+        """非截图结果不注入图片。"""
+        msg = MagicMock()
+        msg.content = "ok"
+        msg.reasoning_content = None
+        msg.tool_calls = None
+        mock_openai.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=msg)]
+        )
+
+        agent = AIAgent(api_key="test-key")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        agent.run_conversation("hi")
+        # 不应注入 user message
+        user_msgs = [m for m in agent.messages if m.get("role") == "user"]
+        for msg in user_msgs:
+            assert isinstance(msg.get("content"), str)  # 都是纯文本
+
+    def test_maybe_inject_image_screenshot(self, mock_openai, tmp_path):
+        """截图工具返回有效路径 → 注入 ImageBlock。"""
+        img = tmp_path / "screenshot.png"
+        img.write_bytes(b"fake-png")
+
+        tc = MagicMock()
+        tc.id = "c1"
+        tc.type = "function"
+        tc.function.name = "screenshot"
+        tc.function.arguments = "{}"
+        msg1 = MagicMock()
+        msg1.content = None
+        msg1.reasoning_content = None
+        msg1.tool_calls = [tc]
+        msg2 = MagicMock()
+        msg2.content = "图片分析结果"
+        msg2.reasoning_content = None
+        msg2.tool_calls = None
+
+        mock_openai.chat.completions.create.side_effect = [
+            MagicMock(choices=[MagicMock(message=msg1)]),
+            MagicMock(choices=[MagicMock(message=msg2)]),
+        ]
+
+        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        agent.registry = MagicMock()
+        agent.registry.get_definitions.return_value = []
+        agent.tool_names = set()
+        agent.memory = MagicMock()
+        agent.memory.get_all.return_value = {"memory": "", "user": ""}
+
+        # mock dispatch 返回截图路径
+        agent.registry.dispatch.return_value = f"截图已保存到 {img}（使用 mock）"
+
+        agent.run_conversation("截图分析")
+
+        # 应有一条 user message 包含 ImageBlock
+        user_msgs = [m for m in agent.messages if m.get("role") == "user"]
+        assert any(
+            isinstance(m.get("content"), list) and
+            any(getattr(b, "type", "") == "image_url" for b in m["content"])
+            for m in user_msgs
+        )
 
 
 class TestCallWithRetry:

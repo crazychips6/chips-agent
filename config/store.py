@@ -11,6 +11,9 @@ _CONFIG_PATH = Path.home() / ".chips" / "config.yaml"
 KNOWN_KEYS = {
     "model": "CHIPS_MODEL",
     "base_url": "CHIPS_BASE_URL",
+    "embedding_provider": "CHIPS_EMBEDDING_PROVIDER",
+    "embedding_model": "CHIPS_EMBEDDING_MODEL",
+    "embedding_base_url": "CHIPS_EMBEDDING_BASE_URL",
 }
 
 

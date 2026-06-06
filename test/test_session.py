@@ -162,3 +162,53 @@ class TestEdgeCases:
         history = db2.get_history(sid)
         assert len(history) == 1
         assert history[0]["content"] == "persist me"
+
+    def test_save_content_block_list(self, db):
+        """ContentBlock 列表自动序列化为 JSON 存储。"""
+        sid = db.create_session()
+        content = [{"type": "text", "text": "看图"}, {"type": "image_url", "image_url": {"url": "https://img.png"}}]
+        db.save_message(sid, "user", content)
+        history = db.get_history(sid)
+        assert isinstance(history[0]["content"], list)
+        assert history[0]["content"][0]["type"] == "text"
+        assert history[0]["content"][1]["type"] == "image_url"
+
+    def test_save_mixed_content_in_batch(self, db):
+        """批量保存中包含 ContentBlock 和纯文本。"""
+        sid = db.create_session()
+        db.save_messages(sid, [
+            {"role": "user", "content": "纯文本"},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://img.png"}}]},
+        ])
+        history = db.get_history(sid)
+        assert len(history) == 2
+        assert history[0]["content"] == "纯文本"
+        assert isinstance(history[1]["content"], list)
+
+    def test_content_roundtrip_preserves_data(self, db):
+        """ContentBlock 存/读往返后数据一致。"""
+        sid = db.create_session()
+        original = [{"type": "text", "text": "描述"}, {"type": "image_url", "image_url": {"url": "https://img.png", "detail": "high"}}]
+        db.save_message(sid, "user", original)
+        history = db.get_history(sid)
+        assert history[0]["content"] == original
+
+    def test_plain_text_unaffected(self, db):
+        """纯文本存/读不受序列化影响。"""
+        sid = db.create_session()
+        db.save_message(sid, "user", "hello")
+        db.save_message(sid, "assistant", "world")
+        history = db.get_history(sid)
+        assert history[0]["content"] == "hello"
+        assert history[1]["content"] == "world"
+
+    def test_save_content_block_dataclass_objects(self, db):
+        """ContentBlock dataclass 对象（非 dict）也能正确序列化。"""
+        from agent.message import TextBlock, ImageBlock
+        sid = db.create_session()
+        content = [TextBlock(text="看图"), ImageBlock(url="https://img.png")]
+        db.save_message(sid, "user", content)
+        history = db.get_history(sid)
+        assert isinstance(history[0]["content"], list)
+        assert history[0]["content"][0]["type"] == "text"
+        assert history[0]["content"][1]["type"] == "image_url"

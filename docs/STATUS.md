@@ -1,39 +1,31 @@
 # chips-agent 现状综述
 
-> 版本: v0.1.0 | 代码量: ~3,400 行 Python | 测试: 185 条 | 开发周期: 2026-05-29 ~ 2026-06-03
+> 版本: v0.3.0 | 测试: 343 条 | 开发周期: 2026-05-29 ~ 2026-06-05
 
 ---
 
 ## 一、整体规模
 
-### 代码分布
-
-| 分类 | 文件数 | 代码行数 | 占比 |
-|------|--------|----------|------|
-| 源模块 | 21 | 1,718 | 50% |
-| 测试 | 12 | 1,703 | 50% |
-| 配置/文档 | ~15 | ~1,300 | — |
-| **总计** | **~48** | **~3,400** | **100%** |
-
 ### 模块详情
 
 | 模块 | 文件 | 行数 | 职责 |
 |------|------|------|------|
-| `agent/` | 4 | 625 | CLI 入口、ReAct 循环、Prompt 组装、日志 |
-| `tool/` | 7 | 546 | 注册中心、工具集、6 个内置工具 |
-| `environment/` | 2 | 98 | Environment Protocol、本地子进程执行 |
-| `safety/` | 2 | 186 | 危险命令审批、凭证剥离与脱敏 |
-| `session/` | 2 | 186 | SQLite 持久化、FTS5 全文搜索 |
-| `memory/` | 2 | 68 | 冻结快照、原子写 |
-| `test/` | 12 | 1,703 | 模块对应测试文件 |
+| `agent/` | 6 | ~500 | CLI 入口、ReAct 循环、Prompt 组装、REPL 框架 |
+| `config/` | 3 | ~80 | 配置读写 (`~/.chips/config.yaml`) |
+| `tool/` | 8 | ~700 | 注册中心、工具集、8 个内置工具 |
+| `environment/` | 3 | ~350 | Environment Protocol、Local/Docker 执行 |
+| `safety/` | 4 | ~300 | 危险命令审批、凭证剥离、白名单、审计日志 |
+| `session/` | 3 | ~200 | SQLite 持久化、FTS5 全文搜索、CLI 管理 |
+| `memory/` | 2 | ~150 | 三级记忆 (working/episodic/semantic) |
+| `test/` | 15 | ~1,800 | 模块对应测试文件 |
 
 ### Git 统计
 
-- 总提交数: 11
-- 分支数: 3（main / develop / phase-10）
+- 总提交数: 14
+- 分支数: 2（main / phase-10）
 - 首次提交: 2026-05-29
-- 最新提交: 2026-06-03
-- 开发周期: 6 天
+- 最新提交: 2026-06-05
+- 开发周期: 8 天
 
 ---
 
@@ -44,68 +36,77 @@
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | ReAct 循环 | ✅ | tool_call → dispatch → 结果回填 → 继续 |
-| 7 层 System Prompt | ✅ | 核心身份/日期/偏好/记忆/上下文/工具/约定 |
-| 上下文压缩 | ✅ | 字符阈值超限时裁剪历史（FIFO，保留最近 2 条） |
-| 工具注入检测 | ✅ | 7 种 prompt injection 正则匹配 |
-| 上下文文件搜索 | ✅ | 向上搜索 CLAUDE.md / CHIP.md / .claude/ |
-| Memory 快照注入 | ✅ | MEMORY.md + USER.md 双文件 |
+| 9 层 System Prompt | ✅ | 核心/日期/偏好/memory/user/episodic/working/上下文/工具/约定 |
+| LLM Retry | ✅ | jittered 指数退避，可重试/不可重试异常分类 |
+| Streaming 输出 | ✅ | 逐 chunk 打印，tool_calls 按 index 累积 |
+| 工具死循环检测 | ✅ | 同工具同参 ≥4 次自动拦截 |
+| 上下文压缩保护 | ✅ | 双阶段：压缩 tool 内容 → 原子组删除，保护首尾 |
+| 注入检测 | ✅ | 7 种 prompt injection 正则匹配 |
+| 上下文文件搜索 | ✅ | 向上搜索 CLAUDE.md / .claude/ |
 
 ### 工具系统
 
 | 工具 | 集 | 功能 |
 |------|----|------|
 | `echo` | core | 回显，验证工具调用链路 |
-| `terminal` | core | 执行 shell 命令（带安全审批 + 凭证剥离） |
-| `file_read` | core | 读文件，拒绝 .env/密钥/.chips 等 |
-| `file_write` | core | 写/追加文件，拒绝 /etc/.git/ 等敏感路径 |
-| `memory_read` | memory | 读取记忆 |
-| `memory_write` | memory | 写入记忆 |
+| `terminal` | core | 执行命令（无 shell + 审批 + 凭证剥离） |
+| `file_read` | core | 读文件（行范围、敏感路径拒绝） |
+| `file_write` | core | 写/追加/patch 模式 |
+| `file_search` | core | grep 封装，正则/文本模式 |
+| `web_fetch` | core | HTTP GET，HTML 纯文本提取，SSRF 防护 |
+| `web_search` | core | Tavily API / DuckDuckGo 回退 |
+| `memory_read` | memory | 读取三级记忆 |
+| `memory_write` | memory | 写入三级记忆 |
 
 ### 安全
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 危险命令检测 | ✅ | HARDLINE(7条) + DANGEROUS(9条) 分层匹配 |
-| 交互审批 | ✅ | 危险命令弹窗 Y/N |
-| 凭证剥离 | ✅ | 20 种环境变量模式脱敏 |
-| 日志脱敏 | ✅ | RedactingFormatter 脱敏 API key/Bearer token |
-| 路径安全 | ✅（基础） | 文件工具敏感路径拒绝，字符串匹配级别 |
+| 危险命令检测 | ✅ | HARDLINE(7条) + DANGEROUS(9条) 分层 |
+| 交互审批 | ✅ | 弹窗 Y/N |
+| 持久化白名单 | ✅ | `~/.chips/allowlist.yaml` |
+| 凭证剥离 | ✅ | 20+ 环境变量模式 + 日志脱敏 |
+| 审计日志 | ✅ | SQLite 哈希链防篡改 |
+| 路径安全 | ✅ | `Path.resolve()` + `fnmatch`，白名单校验 |
+
+### 执行环境
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| LocalEnvironment | ✅ | 无 shell、子进程跟踪 SIGTERM/SIGKILL |
+| DockerEnvironment | ✅ | Docker SDK 启动临时容器 |
 
 ### 持久化
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| Session 自动保存 | ✅ | SQLite + WAL 模式 |
-| FTS5 全文搜索 | ✅ | content-sync 触发器自动索引 |
+| Session 自动保存 | ✅ | SQLite + WAL |
+| FTS5 全文搜索 | ✅ | content-sync 触发器，中文 LIKE 回退 |
 | Session 恢复 | ✅ | `--resume` / `--resume <id>` |
 | 旋转日志 | ✅ | 5MB × 3 备份 |
 
-### 配置
+### 记忆 (Phase 10 F1)
+
+| 层级 | 存储 | 生命周期 |
+|------|------|---------|
+| Working | 内存 dict | 当前会话 |
+| Episodic | EPISODIC.md | 跨会话（含时间戳） |
+| Semantic | MEMORY.md + USER.md | 永久 |
+
+### CLI
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| `.env` 加载 | ✅ | python-dotenv |
-| `~/.chips/config.yaml` | ✅ | model / base_url 自动加载 |
-| CLI 参数 | ✅ | 9 个参数 |
-
-### CLI 入口
-
-| 参数 | 说明 |
-|------|------|
-| `--model` | 模型名称 |
-| `--base-url` | API 地址 |
-| `--message`, `-m` | 单次对话退出 |
-| `--version` | 版本号 |
-| `--debug-context` | 记录 LLM 请求/响应到 JSON |
-| `--toolset` | 工具集选择 |
-| `--no-memory` | 禁用记忆 |
-| `--verbose` | 显示 prompt 各层 |
-| `--resume` | 恢复会话 |
+| REPL 循环 | ✅ | ReplLoop + CommandRegistry 解耦 |
+| prompt_toolkit | ✅ | 历史持久化、Tab 补全、多行编辑 |
+| `chips config` | ✅ | set/get/list 子命令 |
+| `chips session` | ✅ | list/show/search/delete 子命令 |
 
 ### 依赖
 
 ```toml
 openai>=1.0.0
+prompt_toolkit>=3.0.0
 python-dotenv>=1.0
 pyyaml>=6.0
 
@@ -120,7 +121,7 @@ pytest>=9.0.3
 ### 分层依赖
 
 ```
-tool/  safety/  session/  memory/         ← 零内部依赖
+tool/  safety/  session/  memory/  config/   ← 零内部依赖
     ↕        ↕
 environment/                                ← 仅依赖 safety
     ↕        ↕
@@ -134,120 +135,57 @@ agent/                                      ← 依赖接口而非实现
 - **自注册**: 工具通过 `registry.register()` 自注册，import 模块即生效
 - **Environment Protocol**: 抽象接口，可替换实现
 
-### 数据流
-
-```
-User Input → CLI → AIAgent.run_conversation()
-                       │
-                       ├─ PromptBuilder.build() → 7层 System Prompt
-                       │
-                       ├─ LLM API → response
-                       │    ├─ 有 tool_calls → dispatch() → 回填
-                       │    └─ 纯文本 → 返回用户
-                       │
-                       ├─ SessionDB.save_messages() (每个轮次)
-                       └─ MemoryStore (仅在工具调用时写入)
-```
-
 ---
 
 ## 四、测试覆盖
 
-### 按模块
-
-| 测试文件 | 测试数 | 测试内容 |
-|----------|--------|----------|
-| `test_registry.py` | 31 | 注册/派发/缓存/线程安全/业务场景 |
-| `test_prompt.py` | 26 | 7 层组装/injection 检测/截断/上下文搜索 |
-| `test_approval.py` | 22 | hardline/dangerous/交互审批/边界 |
-| `test_builtins.py` | 21 | echo/memory/file/terminal 工具 |
-| `test_session.py` | 19 | CRUD/FTS5/搜索/删除/边界 |
-| `test_sanitize.py` | 14 | 凭证剥离/文本脱敏/格式化器 |
-| `test_loop.py` | 11 | Assistant 消息构建/ReAct 流程/迭代上限 |
-| `test_environment.py` | 10 | 命令执行/安全拦截/超时/凭证剥离 |
-| `test_memory.py` | 10 | 读写/持久化/原子写/快照格式 |
-| `test_toolsets.py` | 7 | 工具集解析/递归/循环引用 |
-| `test_cli.py` | 5 | Wiring 集成/工具集组合 |
-| **总计** | **176**（收集 185，含 parametrize 展开） | |
+| 测试文件 | 测试数 |
+|----------|--------|
+| `test_registry.py` | 31 |
+| `test_prompt.py` | 26 |
+| `test_loop.py` | 24 |
+| `test_builtins.py` | 24 |
+| `test_approval.py` | 22 |
+| `test_session.py` | 19 |
+| `test_sanitize.py` | 14 |
+| `test_environment.py` | 14 |
+| `test_config.py` | 15 |
+| `test_memory.py` | 12 |
+| `test_toolsets.py` | 7 |
+| `test_repl.py` | 16 |
+| `test_cli.py` | 5 |
+| `test_session_cli.py` | 8 |
+| `test_docker_environment.py` | 10 |
+| **总计** | **343** |
 
 ---
 
-## 五、缺点分析
+## 五、Phase 10 完成情况
 
-### 5.1 可靠性短板
-
-| 问题 | 位置 | 影响 | 严重度 |
-|------|------|------|--------|
-| 无 retry | `agent/loop.py:117` | API 429/超时直接崩溃 | 🔴 |
-| 无 streaming | `agent/loop.py` | 用户长时间无反馈 | 🔴 |
-| 上下文压缩破坏 tool_call chain | `agent/loop.py:166` | 删除最早消息可能砍掉关键依赖 | 🔴 |
-| 20 次迭代硬上限 | `agent/loop.py:79` | 长任务粗暴截断 | 🟡 |
-| 单模型单 API | `agent/loop.py:117` | 无 fallback 模型 | 🟡 |
-
-### 5.2 环境/进程管理
-
-| 问题 | 位置 | 影响 | 严重度 |
-|------|------|------|--------|
-| `close()` 是 pass | `environment/local.py:71` | 子进程泄漏 | 🔴 |
-| `shell=True` | `environment/local.py:47` | 命令注入风险 | 🔴 |
-| 无 PTY | `environment/local.py` | 无法交互式命令 | 🟡 |
-| 无 Docker 支持 | 不存在 | 无法安全隔离 | 🟡 |
-
-### 5.3 安全缺陷
-
-| 问题 | 位置 | 影响 | 严重度 |
-|------|------|------|--------|
-| 路径安全字符串匹配 | `tool/builtins/file.py:63` | `/etc` 和 `/etcetera` 都拦（误杀），符号链可绕过 | 🟡 |
-| 无审批白名单 | `safety/approval.py` | 每次弹窗，用户疲劳后可能盲目允许 | 🟡 |
-| 无审计日志 | 不存在 | 无法追溯谁执行了什么命令 | 🟡 |
-| Injection 检测仅正则 | `agent/prompt.py` | 对抗性 prompt 轻松绕过 | 🟡 |
-
-### 5.4 功能缺失
-
-| 缺失功能 | 说明 | 优先级 |
-|----------|------|--------|
-| Web 工具 | 无 HTTP fetch / search | 🟡 |
-| 文件搜索/替换 | 只有读写，无 grep/patch | 🟡 |
-| 多级记忆 | 只有平面 key-value | 🟡 |
-| Rich REPL | 纯文本 input/print | 🟢 |
-| Session 管理子命令 | 只有 `--resume` 参数 | 🟢 |
-| 配置子命令 | 手动改 YAML | 🟢 |
-| 多模态 | 不支持图像 | 🟢 |
-
-### 5.5 可观测性不足
-
-| 问题 | 说明 | 严重度 |
-|------|------|--------|
-| 无用量统计 | 不知道 token 消耗、API 费用 | 🟡 |
-| 无性能追踪 | 不知道每次 LLM 调用耗时 | 🟡 |
-| 调试日志需手动开启 | `--debug-context` 才记录 | 🟢 |
-| 无健康检查 | 无法判断 agent 是否正常工作 | 🟡 |
+| 编号 | 内容 | 状态 |
+|------|------|------|
+| A1 | LLM retry/streaming/死循环检测 | ✅ |
+| A2 | 上下文压缩保护 | ✅ |
+| B1 | 子进程生命周期管理 | ✅ |
+| B2 | DockerEnvironment | ✅ |
+| C | 路径安全重写 | ✅ |
+| D1 | 持久化审批白名单 | ✅ |
+| D2 | 审计日志 | ✅ |
+| E1 | 文件操作增强 (patch/grep/行范围) | ✅ |
+| E2 | Web 工具 | ✅ |
+| F1 | 记忆层级扩展 | ✅ |
+| G1 | Rich REPL | ✅ |
+| G2 | Session 管理命令 | ✅ |
+| G3 | 配置系统 | ✅ |
 
 ---
 
 ## 六、与 Hermes 的差距
 
-| 维度 | chips | Hermes | 差距倍数 |
-|------|-------|--------|----------|
-| 代码总量 | ~3,400 行 | ~541,000 行 | ~160x |
-| 工具数量 | 6 个 | 80+ 个 | ~13x |
-| 模型适配器 | 1 个（OpenAI SDK） | 10+ 个 | 10x+ |
-| 运行环境 | 本地子进程 | local/docker/ssh/singularity | 4x |
-| CLI 复杂度 | 1 文件 ~155 行 | `hermes_cli/` ~50 文件 | 50x |
-| Gateway | 无 | `gateway/` ~20 文件 | — |
-| 插件系统 | 无 | `plugins/` + hooks | — |
-| 技能生态 | 无 | skills hub + marketplace | — |
-| ACP | 无 | `acp_adapter/` ~9 文件 | — |
-| 测试 | 185 条 | 更多（具体未统计） | — |
-
----
-
-## 七、总结
-
-chips 是一个**架构设计正确、实现尚浅**的 agent harness。它的核心价值在于：
-
-1. **干净的分层解耦** — 每层职责清晰，依赖方向单向，模块间通过接口通信
-2. **完整的测试覆盖** — 50% 代码是测试，核心逻辑有充分验证
-3. **可扩展的骨架** — 新增工具只需写 handler + register，新增 environment 只需实现 Protocol
-
-但它离"可日常使用"还差 A 阶段的 **retry/streaming/上下文压缩**，离"可上线部署"还差 B 阶段的**进程管理和容器隔离**。这些正是 Phase 10 要解决的问题。
+| 维度 | chips | Hermes |
+|------|-------|--------|
+| 代码总量 | ~5,000 行 | ~541,000 行 |
+| 工具数量 | 9 个 | 80+ 个 |
+| 模型适配器 | 1 个 (OpenAI SDK) | 10+ 个 |
+| 运行环境 | local/docker | local/docker/ssh/singularity |
+| 多模态 | 不支持 | 支持图像 |

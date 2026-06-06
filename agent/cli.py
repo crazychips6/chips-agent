@@ -109,7 +109,31 @@ def main():
         # 合并 memory 工具集，默认启用记忆
         agent.tool_names |= resolve_toolset("memory") & registry.tool_names
 
-        memory_store = MemoryStore(memory_dir=".memory")
+        embedding_service = None
+        vector_store = None
+        # B3: 尝试初始化 embedding 服务（需要额外的 API key）
+        embed_api_key = os.getenv("OPENAI_API_KEY") or api_key
+        embed_base_url = os.getenv("CHIPS_EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+        if embed_api_key:
+            try:
+                from memory.embedding import OpenAIEmbedding
+                embedding_service = OpenAIEmbedding(
+                    api_key=embed_api_key,
+                    base_url=embed_base_url,
+                    model=os.getenv("CHIPS_EMBEDDING_MODEL", "text-embedding-3-small"),
+                )
+            except Exception:
+                pass  # embedding 不可用不影响主流程
+
+        if embedding_service:
+            from memory.vector import VectorStore
+            vector_store = VectorStore(db_path=".memory/vectors.db")
+
+        memory_store = MemoryStore(
+            memory_dir=".memory",
+            embedding_service=embedding_service,
+            vector_store=vector_store,
+        )
         agent.memory = memory_store
         memory_tool._store = memory_store
 

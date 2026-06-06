@@ -22,6 +22,7 @@ def _sanitize(text: str) -> str:
 
 logger = logging.getLogger("chips")
 
+from agent.message import ImageBlock, TextBlock, image_file_to_data_uri, parse_user_content, to_openai_messages
 from agent.prompt import PromptBuilder
 from agent.retry import jittered_backoff
 from memory.store import MemoryStore
@@ -36,6 +37,14 @@ _MAX_TOOL_LOOP = 4
 
 
 class AIAgent:
+    # 已知支持 vision 的模型列表，用于 ContentBlock 校验
+    _VISION_MODELS: frozenset = frozenset({
+        "gpt-4o", "gpt-4o-mini", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13",
+        "gpt-4o-mini-2024-07-18",
+        "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620",
+        "claude-3-opus-20240229",
+        "gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash",
+    })
     def __init__(
         self,
         api_key: str,
@@ -236,21 +245,76 @@ class AIAgent:
         self._tool_call_history[key] += 1
         return self._tool_call_history[key] >= _MAX_TOOL_LOOP
 
+    # ── Vision 能力检测 ──
+
+    def _is_vision_model(self) -> bool:
+        """当前模型是否支持 vision。"""
+        return self.model in self._VISION_MODELS
+
+    def _check_vision_capability(self, api_messages: list[dict]):
+        """检查消息中是否有图片，以及当前模型是否支持 vision。"""
+        if self._is_vision_model():
+            return
+        for msg in api_messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                continue
+            # content 是序列化后的 list[dict]
+            if any(
+                isinstance(block, dict) and block.get("type") == "image_url"
+                for block in content
+            ):
+                raise ValueError(
+                    f"消息包含图片但当前模型 {self.model} 不支持 vision。"
+                    f"请使用 vision 模型，例如：gpt-4o、claude-3-5-sonnet"
+                )
+
+    # ── 自动图片注入 ──
+
+    _IMAGE_PATH_PREFIX = "截图已保存到 "
+
+    @staticmethod
+    def _extract_screenshot_path(result: str) -> str | None:
+        """从截图工具结果中提取文件路径。"""
+        if not result.startswith(AIAgent._IMAGE_PATH_PREFIX):
+            return None
+        path = result[len(AIAgent._IMAGE_PATH_PREFIX):].split("（")[0]
+        return path if os.path.isfile(path) else None
+
+    def _maybe_inject_image(self, result: str):
+        """如果工具结果是截图，将图片注入为 user message 供后续 LLM 调用。"""
+        path = self._extract_screenshot_path(result)
+        if not path:
+            return
+        try:
+            data_uri = image_file_to_data_uri(path)
+            self.messages.append({
+                "role": "user",
+                "content": [
+                    TextBlock(text="这是截图，请分析："),
+                    ImageBlock(url=data_uri),
+                ],
+            })
+        except Exception:
+            logger.warning("image_inject_failed path=%s", path, exc_info=True)
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
         # system prompt 每次重新构建
         memory_data = self.memory.get_all() if self.memory else {}
         tool_defs = self.registry.get_definitions(self.tool_names) if self.registry else []
+        # B3: 使用向量检索获取与当前消息相关的记忆，而非全量注入
+        retrieved = self.memory.prefetch(user_message) if self.memory else ""
         system = self.prompt_builder.build(
-            memory=memory_data.get("memory", ""),
+            memory=retrieved or memory_data.get("memory", ""),
             user=memory_data.get("user", ""),
             episodic=memory_data.get("episodic", ""),
             working=memory_data.get("working") if self.memory else None,
             context_files=self.context_files,
             tool_defs=tool_defs,
         )
-        self.messages.append({"role": "user", "content": _sanitize(user_message)})
+        self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         # 重置工具循环检测
         self._tool_call_history = defaultdict(int)
@@ -270,9 +334,13 @@ class AIAgent:
         for iteration in range(max_iterations):
             self._maybe_trim_context()
 
+            api_messages = to_openai_messages(
+                [{"role": "system", "content": system}, *self.messages]
+            )
+            self._check_vision_capability(api_messages)
             kwargs = {
                 "model": self.model,
-                "messages": [{"role": "system", "content": system}, *self.messages],
+                "messages": api_messages,
                 "max_tokens": 4096,
             }
 
@@ -320,6 +388,8 @@ class AIAgent:
                         "tool_call_id": tc.id,
                         "content": result,
                     })
+                    # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
+                    self._maybe_inject_image(result)
                 self._save_pending()
             else:
                 content = msg.content or ""
@@ -410,5 +480,20 @@ class AIAgent:
                 "groups_removed": groups_removed,
             })
 
+    @staticmethod
+    def _content_len(content: str | list) -> int:
+        """计算 content 的字符数（兼容 ContentBlock list）。"""
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for block in content:
+                if isinstance(block, dict):
+                    total += len(block.get("text", block.get("image_url", {}).get("url", "")))
+                elif hasattr(block, "text"):
+                    total += len(block.text)
+            return total
+        return 0
+
     def _total_chars(self) -> int:
-        return sum(len(m.get("content") or "") for m in self.messages)
+        return sum(self._content_len(m.get("content") or "") for m in self.messages)

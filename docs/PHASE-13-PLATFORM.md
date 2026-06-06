@@ -1,8 +1,8 @@
-# chips Phase 11 — 平台化与生态扩展
+# chips Phase 13 — 平台化与生态扩展
 
 ## 前提
 
-Phase 10 完成后 chips 已达到"可日常使用"级别。Phase 11 的目标是**拓展交互维度**：从本地终端 REPL → 多平台消息代理、从单 agent → 多 agent 协作、从手动使用 → 自动化调度。
+Phase 12 完成后 chips 已达到"AI 能力补齐"级别。Phase 13 的目标是**拓展交互维度**：从本地终端 REPL → 多平台消息代理、从单 agent → 多 agent 协作、从手动使用 → 自动化调度。
 
 ---
 

@@ -1,5 +1,11 @@
 # chips-agent 项目约定
 
+## 资料库
+
+- `docs/core-reference.md` — Hermes 蒸馏的最小 agent 部分，学习参考
+- `docs/learning/` — 开发过程学习笔记，按阶段分文件存放
+  - 如果用户说需要把学的内容进行记录，则优先记录到该文件夹中
+
 ## 通用规则（始终生效）
 
 - **语言**：使用中文回复，技术术语不强行翻译
@@ -16,7 +22,7 @@ environment/  # 沙盒：Environment协议 + LocalEnvironment
 session/      # 持久化：SQLite (WAL + FTS5)
 memory/       # 记忆：冻结快照 + 原子写
 test/         # 测试：模块对应 test_*.py
-docs/         # 参考资料 + PLAN.md
+docs/         # 架构 (ARCH.md) + 路线图 (ROADMAP.md) + 阶段计划 + 参考资料 + 学习笔记
 log/coding_log/  # coding记录
 ```
 
@@ -34,14 +40,13 @@ log/coding_log/  # coding记录
 
 ### 当 coding 任务完成后
 
-1. 在 `/log/coding_log/` 写入记录，规则如下：
+1. 在 `log/coding_log/` 写入记录
 2. **不要自动提交代码** — 等待用户人工审核后，按指令执行 commit + push
-
-1. **文件拆分规则**：
-   - 阶段任务（如阶段 0/1/2…）或用户要求独立记录的改动 → **每个一个独立文件**，命名 `phase-N-描述.md`
+3. 文件拆分规则：
+   - 阶段任务（如 phase-N）或用户要求独立记录的改动 → 每个一个独立文件，命名 `phase-N-描述.md`
    - 其他细小改动 → 按日期合并到 `YYYY-MM-DD.md`
-2. 每条记录格式（按重要程度分段）：
-   ```markdown
+4. 每条记录格式（按重要程度分段）：
+   ```
    ## 重要：<改动说明>
    - ...
 
@@ -51,8 +56,8 @@ log/coding_log/  # coding记录
    ## 细微：<修正/补漏>
    - ...
    ```
-3. 对需要审查的关键代码，可直接粘贴代码到 log
-4. 日志文件总大小 ≤ 5MB，超限则删除最旧文件
+5. 对需要审查的关键代码，可直接粘贴代码到 log
+6. 日志文件总大小 ≤ 5MB，超限则删除最旧文件
 
 ### 编码约束
 

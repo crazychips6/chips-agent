@@ -107,9 +107,53 @@ class SessionDB:
             conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
+    # ── Content 序列化（支持 ContentBlock 多模态内容） ──
+
+    @staticmethod
+    def _serialize_content(content: str | list) -> str:
+        """将 content 序列化为可存储的字符串。
+
+        str → 原样返回
+        list[dict] → JSON
+        list[dataclass 对象]（TextBlock/ImageBlock）→ 先转 dict 再 JSON
+        """
+        if isinstance(content, str):
+            return content
+        # 将 ContentBlock dataclass 对象转为 dict
+        dicts = []
+        for block in content:
+            if isinstance(block, dict):
+                dicts.append(block)
+            elif hasattr(block, "type"):
+                if block.type == "text":
+                    dicts.append({"type": "text", "text": block.text})
+                elif block.type == "image_url":
+                    dicts.append({
+                        "type": "image_url",
+                        "image_url": {"url": block.url, "detail": block.detail},
+                    })
+        return json.dumps(dicts, ensure_ascii=False)
+
+    @staticmethod
+    def _deserialize_content(raw: str) -> str | list[dict]:
+        """从存储字符串恢复 content。
+
+        纯文本 → 原样返回
+        JSON 数组 → list[dict]（OpenAI API 格式）
+        """
+        if not raw.startswith("["):
+            return raw
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "type" in parsed[0]:
+                return parsed
+        except (json.JSONDecodeError, IndexError, KeyError):
+            pass
+        return raw
+
     # ── Message CRUD ──
 
-    def save_message(self, session_id: str, role: str, content: str,
+    def save_message(self, session_id: str, role: str, content: str | list,
                      tool_calls: list | None = None):
         """保存一条消息到会话。"""
         now = time.time()
@@ -118,7 +162,7 @@ class SessionDB:
             conn.execute("BEGIN")
             conn.execute(
                 "INSERT INTO messages (session_id, role, content, tool_calls, created_at) VALUES (?, ?, ?, ?, ?)",
-                (session_id, role, content, tool_calls_json, now),
+                (session_id, role, self._serialize_content(content), tool_calls_json, now),
             )
             conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
 
@@ -130,7 +174,8 @@ class SessionDB:
             for msg in messages:
                 conn.execute(
                     "INSERT INTO messages (session_id, role, content, tool_calls, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (session_id, msg["role"], msg.get("content", ""),
+                    (session_id, msg["role"],
+                     self._serialize_content(msg.get("content", "")),
                      json.dumps(msg.get("tool_calls", []), ensure_ascii=False),
                      msg.get("created_at", now)),
                 )
@@ -147,7 +192,7 @@ class SessionDB:
 
         history = []
         for r in rows:
-            msg = {"role": r["role"], "content": r["content"]}
+            msg = {"role": r["role"], "content": self._deserialize_content(r["content"])}
             tcs = json.loads(r["tool_calls"])
             if tcs:
                 msg["tool_calls"] = tcs

@@ -116,3 +116,132 @@ class TestEpisodicMemory:
         snapshot = store.for_system_prompt()
         assert "E 阶段完成" in snapshot
 
+
+# ── B3: 向量检索 + 自动 embedding ──
+
+
+class TestPrefetch:
+    def test_prefetch_without_embedding_fallback(self, store):
+        """无 embedding 服务时 prefetch 降级为返回全部 memory。"""
+        store.add("降级测试数据", category="memory")
+        result = store.prefetch("任何查询")
+        assert "降级测试数据" in result
+
+    def test_prefetch_with_embedding(self):
+        """有 embedding 服务时返回检索结果。"""
+        from unittest.mock import MagicMock
+
+        emb_mock = MagicMock()
+        emb_mock.embed.return_value = [[0.1, 0.2, 0.3]]
+
+        import tempfile
+        tmpdir = tempfile.mkdtemp()
+
+        from memory.vector import VectorStore
+        vs_path = os.path.join(tmpdir, "vectors.db")
+        vs = VectorStore(vs_path)
+        vs.add("memory", "向量记忆内容", [0.1, 0.2, 0.3])
+
+        ms = MemoryStore(memory_dir=tmpdir, embedding_service=emb_mock, vector_store=vs)
+        result = ms.prefetch("查询", top_k=5)
+        assert "向量记忆内容" in result
+
+    def test_prefetch_empty_vector_store(self, store):
+        """向量存储为空时回退到文件快照。"""
+        from unittest.mock import MagicMock
+        store._embedding = MagicMock()
+        store._embedding.embed.return_value = [[1.0, 0.0]]
+
+        import tempfile
+        from memory.vector import VectorStore
+        vs_path = os.path.join(tempfile.mkdtemp(), "v.db")
+        store._vector_store = VectorStore(vs_path)
+
+        store.add("文件中的记忆", category="memory")
+        result = store.prefetch("查询")
+        assert "文件中的记忆" in result
+
+    def test_prefetch_embedding_failure_safe(self, store):
+        """embedding 失败时静默降级。"""
+        from unittest.mock import MagicMock
+        emb_mock = MagicMock()
+        emb_mock.embed.side_effect = Exception("API 错误")
+        store._embedding = emb_mock
+
+        store.add("出错也有降级", category="memory")
+        result = store.prefetch("查询")
+        assert "出错也有降级" in result
+
+
+class TestAutoEmbed:
+    def test_add_memory_triggers_auto_embed(self):
+        """add(memory) 自动触发 embedding。"""
+        from unittest.mock import MagicMock
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp()
+        emb_mock = MagicMock()
+        emb_mock.embed.return_value = [[0.5, 0.5]]
+
+        from memory.vector import VectorStore
+        vs_path = os.path.join(tmpdir, "v.db")
+        vs = VectorStore(vs_path)
+
+        ms = MemoryStore(memory_dir=tmpdir, embedding_service=emb_mock, vector_store=vs)
+        ms.add("自动嵌入的数据", category="memory")
+
+        # 验证 embedding 被调用
+        emb_mock.embed.assert_called_once()
+        # 验证存储了数据
+        assert vs.count("memory") == 1
+
+    def test_add_episodic_triggers_auto_embed(self):
+        """add(episodic) 自动触发 embedding。"""
+        from unittest.mock import MagicMock
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp()
+        emb_mock = MagicMock()
+        emb_mock.embed.return_value = [[0.5, 0.5]]
+
+        from memory.vector import VectorStore
+        vs_path = os.path.join(tmpdir, "v.db")
+        vs = VectorStore(vs_path)
+
+        ms = MemoryStore(memory_dir=tmpdir, embedding_service=emb_mock, vector_store=vs)
+        ms.add("会话摘要", category="episodic")
+
+        assert vs.count("episodic") == 1
+
+    def test_add_working_does_not_embed(self):
+        """working 类别不应触发 embedding。"""
+        from unittest.mock import MagicMock
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp()
+        emb_mock = MagicMock()
+        emb_mock.embed.return_value = [[0.5, 0.5]]
+
+        from memory.vector import VectorStore
+        vs_path = os.path.join(tmpdir, "v.db")
+        vs = VectorStore(vs_path)
+
+        ms = MemoryStore(memory_dir=tmpdir, embedding_service=emb_mock, vector_store=vs)
+        ms.add("color: blue", category="working")
+
+        emb_mock.embed.assert_not_called()
+        assert vs.count() == 0
+
+    def test_auto_embed_failure_does_not_block(self, store):
+        """embedding 失败不阻塞 add 主流程。"""
+        from unittest.mock import MagicMock
+        emb_mock = MagicMock()
+        emb_mock.embed.side_effect = Exception("API 挂了")
+        store._embedding = emb_mock
+
+        result = store.add("即使 embedding 失败也要保存", category="memory")
+        assert result["status"] == "ok"
+
+        snapshot = store.for_system_prompt()
+        assert "即使 embedding 失败也要保存" in snapshot
+
