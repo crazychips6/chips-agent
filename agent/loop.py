@@ -23,6 +23,7 @@ from agent.prompt import PromptBuilder
 from gateway.protocol import ModelGateway
 from gateway.types import ChatResult
 from memory.manager import MemoryManager
+from plugins.manager import PluginManager
 from safety.audit import log_event
 from session.db import SessionDB
 from tool.registry import ToolRegistry
@@ -62,6 +63,8 @@ class AIAgent:
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
+        # 插件管理器，由 cli.py 在启动时初始化注入
+        self.plugin_manager: PluginManager | None = None
         # 上下文文件列表，由 cli.py 在启动时搜索注入
         self.context_files: list[tuple[str, str, str]] = []
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
@@ -261,6 +264,9 @@ class AIAgent:
                             continue
 
                         name = tc["function"]["name"]
+                        # 插件钩子：工具调用前
+                        if self.plugin_manager:
+                            args = self.plugin_manager.dispatch_tool_call_pre(name, args)
                         if self.memory_manager.has_tool(name):
                             t0 = time.time()
                             tool_result = self.memory_manager.handle_tool_call(name, args)
@@ -271,6 +277,9 @@ class AIAgent:
                             tool_result = self.registry.dispatch(name, args)
                             elapsed = int((time.time() - t0) * 1000)
                             logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
+                        # 插件钩子：工具调用后
+                        if self.plugin_manager:
+                            tool_result = self.plugin_manager.dispatch_tool_call_post(name, tool_result)
                         log_event("tool_call", {
                             "tool": name,
                             "args_truncated": args_str[:200],
@@ -286,6 +295,8 @@ class AIAgent:
                     self._save_pending()
                 else:
                     content = result.content or ""
+                    if self.plugin_manager:
+                        content = self.plugin_manager.dispatch_response(content)
                     self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
                     last_text_reply = content
@@ -303,6 +314,8 @@ class AIAgent:
         finally:
             self.memory_manager.sync_all(user_message, last_text_reply or "", session_id=self.session_id)
             self.memory_manager.on_session_end(self.messages)
+            if self.plugin_manager:
+                self.plugin_manager.dispatch_session_end(self.messages)
 
     def shutdown(self):
         """释放资源：关闭所有记忆提供者。"""

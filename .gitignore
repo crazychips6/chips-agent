@@ -15,3 +15,6 @@ log/llm_*.md
 
 # 构建产物
 *.egg-info/
+
+# coding 日志（人类阅读，不被 Claude 主动读取）
+log/coding_log/

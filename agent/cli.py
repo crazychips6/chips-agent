@@ -13,6 +13,7 @@ from gateway.providers.openai import OpenAIProvider
 from gateway.stats import UsageRecorder
 from memory.manager import MemoryManager
 from memory.providers.builtin import BuiltinMemoryProvider
+from plugins import PluginManager
 from session.db import SessionDB
 from tool.registry import registry
 from tool.toolsets import resolve_toolset
@@ -123,6 +124,15 @@ def main():
 
     if not args.no_memory:
         agent.memory_manager = _build_memory_manager(holographic=args.holographic)
+
+    # ── 插件系统初始化 ──
+    plugin_mgr = PluginManager(registry=registry)
+    plugin_mgr.add_default_paths()
+    loaded = plugin_mgr.load_all()
+    if loaded:
+        from agent.logger import get_logger
+        get_logger().info("plugins_loaded count=%d", loaded)
+    agent.plugin_manager = plugin_mgr
 
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env

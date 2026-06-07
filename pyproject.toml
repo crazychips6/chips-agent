@@ -36,6 +36,7 @@ include = [
     "session*",
     "memory*",
     "gateway*",
+    "plugins*",
     "test*",
 ]
 

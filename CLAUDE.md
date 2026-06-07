@@ -40,7 +40,7 @@ log/coding_log/  # coding记录
 
 ### 当 coding 任务完成后
 
-1. 在 `log/coding_log/` 写入记录
+1. 在 `log/coding_log/` 写入记录（仅写入，不主动读取）
 2. **不要自动提交代码** — 等待用户人工审核后，按指令执行 commit + push
 3. 文件拆分规则：
    - 阶段任务（如 phase-N）或用户要求独立记录的改动 → 每个一个独立文件，命名 `phase-N-描述.md`
