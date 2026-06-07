@@ -108,11 +108,10 @@ def main():
         print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
         return
 
-    agent = AIAgent(model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream)
-    # 构造 gateway（抽象 LLM 调用），外面包裹用量记录器
+    # 构造 gateway + 用量记录器，注入 agent
     raw_gateway = OpenAIProvider(api_key=api_key, base_url=args.base_url)
     recorder = UsageRecorder(raw_gateway, pricing=ConfigStore().read_pricing())
-    agent.gateway = recorder
+    agent = AIAgent(model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream, gateway=recorder)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names

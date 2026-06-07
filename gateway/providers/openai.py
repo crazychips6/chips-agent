@@ -84,8 +84,11 @@ class OpenAIProvider(ModelGateway):
     def chat_stream(self, messages: list[dict[str, Any]], model: str = "",
                     *, on_chunk: Callable[[str], None] | None = None,
                     **kwargs: Any) -> ChatResult:
-        stream_kwargs = {**kwargs, "stream": True,
-                         "stream_options": {"include_usage": True}}
+        stream_kwargs = {**kwargs, "stream": True}
+        # 通过 extra_body 传递 stream_options，DeepSeek 需要此方式
+        eb = dict(kwargs.get("extra_body") or {})
+        eb["stream_options"] = {"include_usage": True}
+        stream_kwargs["extra_body"] = eb
         _usage: dict[str, int] = {}
 
         def _do_stream():
@@ -97,8 +100,8 @@ class OpenAIProvider(ModelGateway):
 
             for chunk in stream:
                 if chunk.usage:
-                    _usage["prompt"] = chunk.usage.prompt_tokens or 0
-                    _usage["completion"] = chunk.usage.completion_tokens or 0
+                    _usage["prompt_tokens"] = chunk.usage.prompt_tokens or 0
+                    _usage["completion_tokens"] = chunk.usage.completion_tokens or 0
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta

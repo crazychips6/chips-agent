@@ -44,8 +44,6 @@ class AIAgent:
     })
     def __init__(
         self,
-        api_key: str = "",
-        base_url: str = "",
         model: str = "deepseek-chat",
         debug_context: bool = False,
         verbose: bool = False,
@@ -53,11 +51,7 @@ class AIAgent:
         max_retries: int = 3,
         gateway: ModelGateway | None = None,
     ):
-        if gateway:
-            self.gateway = gateway
-        else:
-            from gateway.providers.openai import OpenAIProvider
-            self.gateway = OpenAIProvider(api_key=api_key, base_url=base_url, max_retries=max_retries)
+        self.gateway = gateway
         self.model = model
         self.debug_context = debug_context
         self.verbose = verbose

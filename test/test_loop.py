@@ -39,7 +39,7 @@ class TestBuildAssistantMsg:
     """_build_assistant_msg 将 API 返回转普通 dict。"""
 
     def test_content_only(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         msg = _make_msg(content="你好")
         d = agent._build_assistant_msg(msg)
         assert d["role"] == "assistant"
@@ -49,21 +49,21 @@ class TestBuildAssistantMsg:
 
     def test_reasoning_content(self):
         """DeepSeek reasoning_content 字段被保留。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         msg = _make_msg(content="最终回答", reasoning_content="思考过程")
         d = agent._build_assistant_msg(msg)
         assert d["reasoning_content"] == "思考过程"
 
     def test_no_reasoning(self):
         """没有 reasoning_content 时不添加该字段。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         msg = _make_msg(content="回复")
         d = agent._build_assistant_msg(msg)
         assert "reasoning_content" not in d
 
     def test_tool_calls_dict(self):
         """ChatResult 格式的 dict tool_calls 正确转换。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         result = ChatResult(
             content=None,
             tool_calls=[_make_tool_call("call_1", "echo", '{"text":"hello"}')],
@@ -75,7 +75,7 @@ class TestBuildAssistantMsg:
 
     def test_tool_calls_magicmock(self):
         """MagicMock 兼容格式也正常处理。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         tc = MagicMock()
         tc.id = "call_1"
         tc.type = "function"
@@ -191,21 +191,21 @@ class TestRunConversation:
 class TestConstructor:
     def test_verbose_passthrough(self):
         """verbose 参数传递到 PromptBuilder。"""
-        agent = AIAgent(api_key="test-key", verbose=True)
+        agent = AIAgent(verbose=True)
         assert agent.verbose is True
         assert agent.prompt_builder.verbose is True
 
     def test_default_verbose_off(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         assert agent.verbose is False
         assert agent.prompt_builder.verbose is False
 
     def test_stream_default_off(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         assert agent.stream is False
 
     def test_max_retries_default(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         assert agent._max_retries == 3
 
     def test_gateway_injection(self):
@@ -267,7 +267,7 @@ class TestVisionCapability:
         assert reply == "你好"
 
     def test_is_vision_model_helper(self):
-        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        agent = AIAgent(model="gpt-4o")
         assert agent._is_vision_model() is True
         agent.model = "deepseek-chat"
         assert agent._is_vision_model() is False
@@ -339,20 +339,20 @@ class TestImageInjection:
 
 class TestToolLoopDetection:
     def test_under_threshold(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
         assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
         assert agent._detect_tool_loop("echo", '{"text":"hi"}') is False
 
     def test_detects_loop(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         agent._detect_tool_loop("echo", '{"text":"hi"}')
         agent._detect_tool_loop("echo", '{"text":"hi"}')
         agent._detect_tool_loop("echo", '{"text":"hi"}')
         assert agent._detect_tool_loop("echo", '{"text":"hi"}') is True
 
     def test_different_args_not_loop(self):
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         for i in range(5):
             assert agent._detect_tool_loop("echo", f'{{"text":"bye_{i}"}}') is False
 
@@ -394,7 +394,7 @@ class TestTrimContext:
 
     def test_under_limit_no_trim(self):
         """未超限时不删除任何消息。"""
-        agent = AIAgent(api_key="test-key", max_retries=1)
+        agent = AIAgent(max_retries=1)
         agent.max_context_chars = 1000
         agent.messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
         expected = agent.messages[:]
@@ -403,7 +403,7 @@ class TestTrimContext:
 
     def test_compress_long_tool(self):
         """tool 结果超限时被截断，消息数量不变。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         agent.max_context_chars = 100
         long_content = "a" * 5000
         agent.messages = [
@@ -419,7 +419,7 @@ class TestTrimContext:
 
     def test_remove_middle_group_keeps_first_and_last(self):
         """超限时删除中间组，保护第 1 组和最后 2 组。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         agent.max_context_chars = 200
         # 5 个组：user + 3 轮 assistant+tool + 最终 assistant
         agent.messages = [
@@ -445,7 +445,7 @@ class TestTrimContext:
 
     def test_few_messages_no_removal(self):
         """消息数 ≤3 时只压缩，不删除。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         agent.max_context_chars = 50
         agent.messages = [
             {"role": "user", "content": "start" + "x" * 100},
@@ -456,7 +456,7 @@ class TestTrimContext:
 
     def test_preserves_tool_pair_after_trim(self):
         """删除后所有 assistant+tool_calls 都有对应的 tool 跟进。"""
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent()
         agent.max_context_chars = 100
         msgs = [{"role": "user", "content": "go"}]
         for i in range(4):

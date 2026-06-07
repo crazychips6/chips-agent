@@ -42,3 +42,20 @@ class ModelGateway(ABC):
 
 - `_build_assistant_msg` 增加 dict/MagicMock 双兼容（向后兼容 MagicMock 测试，向前兼容 ChatResult）
 - `tools` 参数不再混入 kwargs dict，作为具名参数传给 gateway
+
+## 重要：streaming usage 修复
+
+- `OpenAIProvider.chat_stream()` 中 `stream_options` 从 top-level kwargs 改为通过 `extra_body` 传递
+- DeepSeek 流式 API 无法通过标准 kwargs 接收 `stream_options={"include_usage": True}`，导致始终返回 0 tokens
+- 现通过 `extra_body` 传递，兼容 OpenAI / DeepSeek 等厂商
+
+```python
+# Before（DeepSeek 无效）
+stream_kwargs = {**kwargs, "stream": True, "stream_options": {"include_usage": True}}
+
+# After（双厂商兼容）
+stream_kwargs = {**kwargs, "stream": True}
+eb = dict(kwargs.get("extra_body") or {})
+eb["stream_options"] = {"include_usage": True}
+stream_kwargs["extra_body"] = eb
+```

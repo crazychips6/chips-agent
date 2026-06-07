@@ -342,7 +342,7 @@ class TestBusinessScenario:
             handler=lambda args: args.get("text", ""),
         )
 
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test-model")
+        agent = AIAgent(model="test-model")
         agent.registry = r
         # 模拟 CLI 中的快照赋值
         agent.tool_names = r.tool_names
@@ -358,7 +358,7 @@ class TestBusinessScenario:
 
         from agent.loop import AIAgent
 
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test-model")
+        agent = AIAgent(model="test-model")
         agent.registry = r
         # wiring 时拍快照
         agent.tool_names = r.tool_names

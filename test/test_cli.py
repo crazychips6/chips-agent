@@ -112,7 +112,7 @@ class TestToolsetAndMemoryWiring:
 
     def test_tool_names_after_wiring(self, clean_registry):
         """注入 core 后 tool_names 内容正确。"""
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
+        agent = AIAgent(model="test")
         agent.registry = clean_registry
 
         # 模拟 cli.py 的 wiring 顺序
@@ -121,7 +121,7 @@ class TestToolsetAndMemoryWiring:
 
     def test_tool_names_core_only(self, clean_registry):
         """只加载 core 工具集。"""
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
+        agent = AIAgent(model="test")
         agent.registry = clean_registry
         agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
         assert agent.tool_names == {"echo"}
