@@ -312,6 +312,9 @@ class AIAgent:
         )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
+        # 初始化记忆提供者（建库、连接等）
+        self.memory_manager.initialize_all(session_id=self.session_id)
+
         # 重置工具循环检测
         self._tool_call_history = defaultdict(int)
 
@@ -327,103 +330,111 @@ class AIAgent:
         last_text_reply = None
 
         # ReAct 循环
-        for iteration in range(max_iterations):
-            self._maybe_trim_context()
+        try:
+            for iteration in range(max_iterations):
+                self._maybe_trim_context()
 
-            api_messages = to_openai_messages(
-                [{"role": "system", "content": system}, *self.messages]
-            )
-            self._check_vision_capability(api_messages)
-            kwargs = {
-                "model": self.model,
-                "messages": api_messages,
-                "max_tokens": 4096,
-            }
+                api_messages = to_openai_messages(
+                    [{"role": "system", "content": system}, *self.messages]
+                )
+                self._check_vision_capability(api_messages)
+                kwargs = {
+                    "model": self.model,
+                    "messages": api_messages,
+                    "max_tokens": 4096,
+                }
 
-            if self.registry or self.memory_manager.providers:
-                tools = []
-                if self.registry:
-                    tools.extend(self.registry.get_definitions(self.tool_names))
-                mem_schemas = self.memory_manager.get_all_tool_schemas()
-                existing_names = {s.get("function", s).get("name") for s in tools}
-                for s in mem_schemas:
-                    name = s.get("function", s).get("name") or s.get("name", "")
-                    if not name or name in existing_names:
-                        continue
-                    if "type" not in s:
-                        s = {"type": "function", "function": s}
-                    tools.append(s)
-                    existing_names.add(name)
-                if tools:
-                    kwargs["tools"] = tools
+                if self.registry or self.memory_manager.providers:
+                    tools = []
+                    if self.registry:
+                        tools.extend(self.registry.get_definitions(self.tool_names))
+                    mem_schemas = self.memory_manager.get_all_tool_schemas()
+                    existing_names = {s.get("function", s).get("name") for s in tools}
+                    for s in mem_schemas:
+                        name = s.get("function", s).get("name") or s.get("name", "")
+                        if not name or name in existing_names:
+                            continue
+                        if "type" not in s:
+                            s = {"type": "function", "function": s}
+                        tools.append(s)
+                        existing_names.add(name)
+                    if tools:
+                        kwargs["tools"] = tools
 
-            # LLM 调用（统一入口，内部处理 retry/streaming）
-            msg = self._call_llm_streaming(kwargs) if self.stream else self._call_llm(kwargs)
+                # LLM 调用（统一入口，内部处理 retry/streaming）
+                msg = self._call_llm_streaming(kwargs) if self.stream else self._call_llm(kwargs)
 
-            if self.debug_context:
-                rounds.append({"request": kwargs, "response": {"content": msg.content, "reasoning_content": getattr(msg, "reasoning_content", None), "tool_calls": [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in (msg.tool_calls or [])]}})
-                with open(_DEBUG_LOG, "w") as f:
-                    json.dump(rounds, f, ensure_ascii=False, indent=2)
+                if self.debug_context:
+                    rounds.append({"request": kwargs, "response": {"content": msg.content, "reasoning_content": getattr(msg, "reasoning_content", None), "tool_calls": [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in (msg.tool_calls or [])]}})
+                    with open(_DEBUG_LOG, "w") as f:
+                        json.dump(rounds, f, ensure_ascii=False, indent=2)
 
-            if msg.tool_calls:
-                self.messages.append(self._build_assistant_msg(msg))
-                for tc in msg.tool_calls:
-                    try:
-                        args = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        args = {}
-                    args_str = json.dumps(args, sort_keys=True) if args else "{}"
+                if msg.tool_calls:
+                    self.messages.append(self._build_assistant_msg(msg))
+                    for tc in msg.tool_calls:
+                        try:
+                            args = json.loads(tc.function.arguments)
+                        except json.JSONDecodeError:
+                            args = {}
+                        args_str = json.dumps(args, sort_keys=True) if args else "{}"
 
-                    # 死循环检测
-                    if self._detect_tool_loop(tc.function.name, args_str):
+                        # 死循环检测
+                        if self._detect_tool_loop(tc.function.name, args_str):
+                            self.messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": f"错误：工具 {tc.function.name} 已被连续调用 {_MAX_TOOL_LOOP} 次，疑似死循环。请换一种方式解决问题。",
+                            })
+                            self._save_pending()
+                            # 继续循环让 LLM 有机会看到错误信息并调整策略
+                            continue
+
+                        if self.memory_manager.has_tool(tc.function.name):
+                            t0 = time.time()
+                            result = self.memory_manager.handle_tool_call(tc.function.name, args)
+                            elapsed = int((time.time() - t0) * 1000)
+                            logger.info("tool=%s source=memory_manager duration_ms=%d", tc.function.name, elapsed)
+                        else:
+                            t0 = time.time()
+                            result = self.registry.dispatch(tc.function.name, args)
+                            elapsed = int((time.time() - t0) * 1000)
+                            logger.info("tool=%s source=registry duration_ms=%d", tc.function.name, elapsed)
+                        log_event("tool_call", {
+                            "tool": tc.function.name,
+                            "args_truncated": args_str[:200],
+                            "session_id": self.session_id,
+                        })
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc.id,
-                            "content": f"错误：工具 {tc.function.name} 已被连续调用 {_MAX_TOOL_LOOP} 次，疑似死循环。请换一种方式解决问题。",
+                            "content": result,
                         })
-                        self._save_pending()
-                        # 继续循环让 LLM 有机会看到错误信息并调整策略
-                        continue
+                        # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
+                        self._maybe_inject_image(result)
+                    self._save_pending()
+                else:
+                    content = msg.content or ""
+                    self.messages.append(self._build_assistant_msg(msg))
+                    self._save_pending()
+                    last_text_reply = content
+                    if content:
+                        if self.stream:
+                            return ""  # 已由 _call_llm_streaming 实时输出
+                        return content
+                    return ""
 
-                    if self.memory_manager.has_tool(tc.function.name):
-                        t0 = time.time()
-                        result = self.memory_manager.handle_tool_call(tc.function.name, args)
-                        elapsed = int((time.time() - t0) * 1000)
-                        logger.info("tool=%s source=memory_manager duration_ms=%d", tc.function.name, elapsed)
-                    else:
-                        t0 = time.time()
-                        result = self.registry.dispatch(tc.function.name, args)
-                        elapsed = int((time.time() - t0) * 1000)
-                        logger.info("tool=%s source=registry duration_ms=%d", tc.function.name, elapsed)
-                    log_event("tool_call", {
-                        "tool": tc.function.name,
-                        "args_truncated": args_str[:200],
-                        "session_id": self.session_id,
-                    })
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    })
-                    # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
-                    self._maybe_inject_image(result)
-                self._save_pending()
-            else:
-                content = msg.content or ""
-                self.messages.append(self._build_assistant_msg(msg))
-                self._save_pending()
-                last_text_reply = content
-                if content:
-                    if self.stream:
-                        return ""  # 已由 _call_llm_streaming 实时输出
-                    return content
-                return ""
+            # 达到最大迭代次数
+            self._save_pending()
+            if last_text_reply:
+                return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
+            return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
+        finally:
+            self.memory_manager.sync_all(user_message, last_text_reply or "", session_id=self.session_id)
+            self.memory_manager.on_session_end(self.messages)
 
-        # 达到最大迭代次数
-        self._save_pending()
-        if last_text_reply:
-            return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
-        return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
+    def shutdown(self):
+        """释放资源：关闭所有记忆提供者。"""
+        self.memory_manager.shutdown_all()
 
     def _save_pending(self):
         """将尚未持久化的消息写入 session 数据库。"""

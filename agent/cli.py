@@ -175,6 +175,7 @@ def main():
         cmd_registry=cmd_reg,
     )
     loop.run()
+    agent.shutdown()
 
 
 if __name__ == "__main__":
