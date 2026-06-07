@@ -118,28 +118,13 @@ CONVENTIONS_PROMPT = """## 回复规范
 - 任务完成后，用中文给出简洁总结"""
 
 
-def _format_tool_rules(tool_defs: list[dict]) -> str:
-    """从 tool definition 列表生成工具规则文本。"""
-    lines = ["你可用以下工具："]
-    for t in tool_defs:
-        func = t.get("function", t)
-        name = func.get("name", "?")
-        desc = func.get("description", "")
-        if desc:
-            # 只取第一行描述
-            first_line = desc.split("\n")[0].rstrip(".")
-            lines.append(f"- {name}：{first_line}")
-        else:
-            lines.append(f"- {name}")
-    return "\n".join(lines)
-
-
 # ── PromptBuilder ──
 
 class PromptBuilder:
-    """7 层 System Prompt 组装器。
+    """System Prompt 组装器。
 
     build() 接收原始数据、组装各层、超出 max_prompt_chars 时保头保尾截中间。
+    工具感知依赖 OpenAI tools API 参数，不在 system prompt 中冗余列举。
     """
 
     def __init__(self, verbose: bool = False, max_prompt_chars: int = 6000):
@@ -150,12 +135,8 @@ class PromptBuilder:
     def build(
         self,
         *,
-        memory: str = "",
-        user: str = "",
-        episodic: str = "",
-        memory_prompt: str = "",  # 从 MemoryManager 注入（优先于上面三个）
+        memory_prompt: str = "",
         context_files: list[tuple[str, str, str]] | None = None,
-        tool_defs: list[dict] | None = None,
     ) -> str:
         layers: list[tuple[str, str]] = []
 
@@ -166,16 +147,7 @@ class PromptBuilder:
         layers.append(("当前日期", f"当前日期：{datetime.date.today()}"))
 
         if memory_prompt:
-            # MemoryManager 模式：单个块包含所有提供者内容
             layers.append(("持久记忆", memory_prompt.strip()))
-        else:
-            # 传统模式：三段分离
-            if user.strip():
-                layers.append(("用户偏好", user.strip()))
-            if memory.strip():
-                layers.append(("持久记忆", memory.strip()))
-            if episodic.strip():
-                layers.append(("历史会话摘要", episodic.strip()))
 
         # Layer 6 — 项目上下文（可选）
         if context_files:
@@ -183,10 +155,6 @@ class PromptBuilder:
             for _path, rel, content in context_files:
                 parts.append(f"文件：{rel}\n{content}")
             layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
-
-        # Layer 7 — 工具规则（可选）
-        if tool_defs:
-            layers.append(("工具规则", _format_tool_rules(tool_defs)))
 
         # Layer 8 — 调用约定（始终存在）
         layers.append(("调用约定", CONVENTIONS_PROMPT))

@@ -26,7 +26,6 @@ from agent.message import ImageBlock, TextBlock, image_file_to_data_uri, parse_u
 from agent.prompt import PromptBuilder
 from agent.retry import jittered_backoff
 from memory.manager import MemoryManager
-from memory.store import MemoryStore
 from safety.audit import log_event
 from session.db import SessionDB
 from tool.registry import ToolRegistry
@@ -66,8 +65,7 @@ class AIAgent:
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
-        self.memory: MemoryStore | None = None
-        self.memory_manager: MemoryManager | None = None
+        self.memory_manager = MemoryManager()
         # 上下文文件列表，由 cli.py 在启动时搜索注入
         self.context_files: list[tuple[str, str, str]] = []
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
@@ -304,26 +302,14 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
         # system prompt 每次重新构建
-        tool_defs = self.registry.get_definitions(self.tool_names) if self.registry else []
-
-        if self.memory_manager:
-            mem_prompt = self.memory_manager.build_system_prompt()
-            prefetch = self.memory_manager.prefetch_all(user_message)
-            if prefetch:
-                mem_prompt = (mem_prompt + "\n\n" + prefetch) if mem_prompt else prefetch
-            system = self.prompt_builder.build(
-                memory_prompt=mem_prompt,
-                context_files=self.context_files,
-                tool_defs=tool_defs,
-            )
-        else:
-            system = self.prompt_builder.build(
-                memory=self.memory.get_memory() if self.memory else "",
-                user=self.memory.get_user() if self.memory else "",
-                episodic=self.memory.get_episodic() if self.memory else "",
-                context_files=self.context_files,
-                tool_defs=tool_defs,
-            )
+        mem_prompt = self.memory_manager.build_system_prompt()
+        prefetch = self.memory_manager.prefetch_all(user_message)
+        if prefetch:
+            mem_prompt = (mem_prompt + "\n\n" + prefetch) if mem_prompt else prefetch
+        system = self.prompt_builder.build(
+            memory_prompt=mem_prompt,
+            context_files=self.context_files,
+        )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         # 重置工具循环检测
@@ -354,22 +340,20 @@ class AIAgent:
                 "max_tokens": 4096,
             }
 
-            if self.registry or self.memory_manager:
+            if self.registry or self.memory_manager.providers:
                 tools = []
                 if self.registry:
                     tools.extend(self.registry.get_definitions(self.tool_names))
-                if self.memory_manager:
-                    mem_schemas = self.memory_manager.get_all_tool_schemas()
-                    existing_names = {s.get("function", s).get("name") for s in tools}
-                    for s in mem_schemas:
-                        name = s.get("function", s).get("name") or s.get("name", "")
-                        if not name or name in existing_names:
-                            continue
-                        # memory provider schemas 可能是扁平格式（缺 type/function 包装）
-                        if "type" not in s:
-                            s = {"type": "function", "function": s}
-                        tools.append(s)
-                        existing_names.add(name)
+                mem_schemas = self.memory_manager.get_all_tool_schemas()
+                existing_names = {s.get("function", s).get("name") for s in tools}
+                for s in mem_schemas:
+                    name = s.get("function", s).get("name") or s.get("name", "")
+                    if not name or name in existing_names:
+                        continue
+                    if "type" not in s:
+                        s = {"type": "function", "function": s}
+                    tools.append(s)
+                    existing_names.add(name)
                 if tools:
                     kwargs["tools"] = tools
 
@@ -401,7 +385,7 @@ class AIAgent:
                         # 继续循环让 LLM 有机会看到错误信息并调整策略
                         continue
 
-                    if self.memory_manager and self.memory_manager.has_tool(tc.function.name):
+                    if self.memory_manager.has_tool(tc.function.name):
                         t0 = time.time()
                         result = self.memory_manager.handle_tool_call(tc.function.name, args)
                         elapsed = int((time.time() - t0) * 1000)

@@ -71,7 +71,7 @@ class TestAgentWiring:
         system = call_kwargs["messages"][0]["content"]
 
         layers = ["核心身份", "当前日期", "持久记忆",
-                   "项目上下文", "工具规则", "调用约定"]
+                   "项目上下文", "调用约定"]
         for layer in layers:
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
@@ -92,9 +92,8 @@ class TestAgentWiring:
 
         assert "# 核心身份" in system
         assert "# 当前日期" in system
-        assert "# 工具规则" in system
         assert "# 调用约定" in system
-        assert "# 用户偏好" not in system
+        assert "# 工具规则" not in system
         assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
 

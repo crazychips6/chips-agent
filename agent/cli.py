@@ -66,7 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_memory_manager(holographic: bool = False) -> MemoryManager | None:
+def _build_memory_manager(holographic: bool = False) -> MemoryManager:
     """构建记忆子系统（MemoryManager + BuiltinMemoryProvider + 可选 Holographic）。"""
     memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")
     mm = MemoryManager()
@@ -156,7 +156,7 @@ def main():
 
     ctx_count = len(agent.context_files)
     mem_status = "off"
-    if agent.memory_manager:
+    if agent.memory_manager.providers:
         provider_names = [p.name for p in agent.memory_manager.providers]
         mem_status = "+".join(provider_names)
     print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")

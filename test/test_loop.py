@@ -103,18 +103,18 @@ class TestRunConversation:
             {"function": {"name": "echo", "description": "回显"}}
         ]
         agent.tool_names = {"echo"}
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = "项目记忆"
-        agent.memory.get_user.return_value = "用户偏好"
-        agent.memory.get_episodic.return_value = ""
+        agent.memory_manager = MagicMock()
+        agent.memory_manager.build_system_prompt.return_value = "项目记忆\n用户偏好"
+        agent.memory_manager.prefetch_all.return_value = ""
+        agent.memory_manager.get_all_tool_schemas.return_value = []
         agent.context_files = [("/a", "CHIP.md", "# 项目说明")]
 
         agent.run_conversation("hi")
 
         call_kwargs = mock_openai.chat.completions.create.call_args[1]
         system = call_kwargs["messages"][0]["content"]
-        for layer in ("核心身份", "当前日期", "用户偏好", "持久记忆",
-                      "项目上下文", "工具规则", "调用约定"):
+        for layer in ("核心身份", "当前日期", "持久记忆",
+                      "项目上下文", "调用约定"):
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
     def test_prompt_layers_conditional(self, mock_openai):
@@ -128,10 +128,6 @@ class TestRunConversation:
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
         agent.context_files = []
 
         agent.run_conversation("hi")
@@ -141,7 +137,6 @@ class TestRunConversation:
         assert "# 核心身份" in system
         assert "# 当前日期" in system
         assert "# 调用约定" in system
-        assert "# 用户偏好" not in system
         assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
         assert "# 工具规则" not in system
@@ -154,7 +149,6 @@ class TestRunConversation:
         )
 
         agent = AIAgent(api_key="test-key")
-        agent.memory = None
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()

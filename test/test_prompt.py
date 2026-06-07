@@ -116,18 +116,14 @@ class TestPromptBuilder:
         assert str(datetime.date.today()) in result
 
     def test_memory_layer(self):
-        result = PromptBuilder().build(memory="记住重要的事情")
+        result = PromptBuilder().build(memory_prompt="记住重要的事情")
         assert "# 持久记忆" in result
         assert "记住重要的事情" in result
 
-    def test_user_layer(self):
-        result = PromptBuilder().build(user="喜欢简洁回复")
-        assert "# 用户偏好" in result
+    def test_memory_prompt_user_and_episodic_in_one_block(self):
+        result = PromptBuilder().build(memory_prompt="喜欢简洁回复\n上次完成了 Phase E")
+        assert "# 持久记忆" in result
         assert "喜欢简洁回复" in result
-
-    def test_episodic_layer(self):
-        result = PromptBuilder().build(episodic="上次完成了 Phase E")
-        assert "# 历史会话摘要" in result
         assert "Phase E" in result
 
     def test_context_layer(self):
@@ -137,31 +133,20 @@ class TestPromptBuilder:
         assert "CHIP.md" in result
         assert "# 项目说明" in result
 
-    def test_tool_layer(self):
-        defs = [{"function": {"name": "echo", "description": "回显"}}]
-        result = PromptBuilder().build(tool_defs=defs)
-        assert "# 工具规则" in result
-        assert "echo" in result
-
     def test_all_layers(self):
         result = PromptBuilder().build(
-            memory="记忆内容",
-            user="用户偏好",
-            episodic="历史摘要",
+            memory_prompt="记忆内容\n用户偏好\n历史摘要",
             context_files=[("/a", "ctx.md", "项目上下文")],
-            tool_defs=[{"function": {"name": "t1", "description": "工具1"}}],
         )
-        for name in ("核心身份", "当前日期", "用户偏好", "持久记忆",
-                     "历史会话摘要",
-                     "项目上下文", "工具规则", "调用约定"):
+        for name in ("核心身份", "当前日期", "持久记忆",
+                     "项目上下文", "调用约定"):
             assert f"# {name}" in result
 
     def test_only_3_layers_when_empty(self):
         """无任何参数时只有 3 个必现层。"""
         result = PromptBuilder().build()
-        sections = [n for n in ("# 核心身份", "# 用户偏好", "# 持久记忆",
-                                "# 历史会话摘要",
-                                "# 项目上下文", "# 工具规则")
+        sections = [n for n in ("# 核心身份", "# 持久记忆",
+                                "# 项目上下文")
                     if n in result]
         assert len(sections) == 1  # only # 核心身份
 
@@ -169,28 +154,26 @@ class TestPromptBuilder:
         builder = PromptBuilder(max_prompt_chars=500)
         long = "项目上下文内容 " * 200
         result = builder.build(
-            memory="m", user="u",
+            memory_prompt="m\nu",
             context_files=[("/a", "ctx.md", long)],
-            tool_defs=[{"function": {"name": "t1", "description": "t"}}],
         )
         assert "# 核心身份" in result
-        assert "# 调用约定" in result
         assert len(result) <= 600
         assert "已截断" in result  # 整层丢弃提示
 
     def test_no_truncation_when_small(self):
         result = PromptBuilder(max_prompt_chars=6000).build(
-            memory="简短", user="简短",
+            memory_prompt="简短",
         )
         assert len(result) < 6000
         assert "已截断" not in result
 
     def test_verbose_disabled(self, capsys):
-        PromptBuilder(verbose=False).build(memory="测试")
+        PromptBuilder(verbose=False).build(memory_prompt="测试")
         assert "System Prompt Layers" not in capsys.readouterr().err
 
     def test_verbose_enabled(self, capsys):
-        PromptBuilder(verbose=True).build(memory="测试记忆")
+        PromptBuilder(verbose=True).build(memory_prompt="测试记忆")
         err = capsys.readouterr().err
         assert "System Prompt Layers" in err
         assert "核心身份" in err
@@ -198,8 +181,8 @@ class TestPromptBuilder:
 
     def test_verbose_only_once(self, capsys):
         b = PromptBuilder(verbose=True)
-        b.build(memory="第一次")
-        b.build(memory="第二次")
+        b.build(memory_prompt="第一次")
+        b.build(memory_prompt="第二次")
         assert capsys.readouterr().err.count("System Prompt Layers") == 1
 
 
