@@ -3,11 +3,12 @@
 模拟 cli.py 的 wiring 流程，验证 registry → memory → context → prompt 的串联结果。
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from agent.loop import AIAgent
+from gateway.types import ChatResult
 from memory.manager import MemoryManager
 from memory.providers.builtin import BuiltinMemoryProvider
 from tool.registry import ToolRegistry
@@ -23,27 +24,19 @@ def clean_registry():
 
 
 @pytest.fixture
-def mock_openai():
-    with patch("agent.loop.OpenAI") as mock:
-        client = MagicMock()
-        mock.return_value = client
-
-        msg = MagicMock()
-        msg.content = "回复"
-        msg.reasoning_content = None
-        msg.tool_calls = None
-        client.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
-        yield client
+def mock_gateway():
+    """提供 mock gateway，避免实际 API 调用。"""
+    gw = MagicMock()
+    gw.chat.return_value = ChatResult(content="回复")
+    return gw
 
 
 class TestAgentWiring:
     """模拟 CLI 的 wiring 流程，验证 agent 状态和 prompt 结果。"""
 
-    def test_full_wiring(self, clean_registry, mock_openai, tmp_path):
-        """完整链路：registry + tools + MemoryManager + context → 7 层 prompt。"""
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
+    def test_full_wiring(self, clean_registry, mock_gateway, tmp_path):
+        """完整链路：registry + tools + MemoryManager + context → 全部 prompt 层。"""
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = clean_registry
 
         # 注入 toolset
@@ -66,8 +59,8 @@ class TestAgentWiring:
         # 执行一次对话
         agent.run_conversation("你好")
 
-        # 验证 prompt 包含 7 层
-        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        # 验证 prompt 包含全部层
+        call_kwargs = mock_gateway.chat.call_args[1]
         system = call_kwargs["messages"][0]["content"]
 
         layers = ["核心身份", "当前日期", "持久记忆",
@@ -75,19 +68,18 @@ class TestAgentWiring:
         for layer in layers:
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
-    def test_wiring_no_memory(self, clean_registry, mock_openai):
+    def test_wiring_no_memory(self, clean_registry, mock_gateway):
         """--no-memory 场景：只有 core 工具集，无记忆层。"""
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = clean_registry
 
         # 只注入 core，不注入 memory
         agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
-        agent.memory = None
         agent.context_files = []
 
         agent.run_conversation("hi")
 
-        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        call_kwargs = mock_gateway.chat.call_args[1]
         system = call_kwargs["messages"][0]["content"]
 
         assert "# 核心身份" in system
@@ -97,12 +89,11 @@ class TestAgentWiring:
         assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
 
-    def test_context_files_flow_into_prompt(self, clean_registry, mock_openai, tmp_path):
+    def test_context_files_flow_into_prompt(self, clean_registry, mock_gateway, tmp_path):
         """上下文文件内容正确注入到 prompt 的项目上下文层。"""
-        agent = AIAgent(api_key="test-key", base_url="http://test", model="test")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = clean_registry
         agent.tool_names = clean_registry.tool_names
-        agent.memory = None
 
         ctx = tmp_path / "CONTEXT.md"
         ctx.write_text("测试项目的上下文数据")
@@ -110,7 +101,7 @@ class TestAgentWiring:
 
         agent.run_conversation("做什么")
 
-        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        call_kwargs = mock_gateway.chat.call_args[1]
         system = call_kwargs["messages"][0]["content"]
         assert "测试项目的上下文数据" in system
         assert "CONTEXT.md" in system

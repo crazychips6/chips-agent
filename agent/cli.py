@@ -9,6 +9,8 @@ from agent.loop import AIAgent
 from agent.logger import setup_logging, get_logger
 from agent.prompt import search_context_files
 from config.store import ConfigStore
+from gateway.providers.openai import OpenAIProvider
+from gateway.stats import UsageRecorder
 from memory.manager import MemoryManager
 from memory.providers.builtin import BuiltinMemoryProvider
 from session.db import SessionDB
@@ -106,7 +108,11 @@ def main():
         print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
         return
 
-    agent = AIAgent(api_key=api_key, base_url=args.base_url, model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream)
+    agent = AIAgent(model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream)
+    # 构造 gateway（抽象 LLM 调用），外面包裹用量记录器
+    raw_gateway = OpenAIProvider(api_key=api_key, base_url=args.base_url)
+    recorder = UsageRecorder(raw_gateway, pricing=ConfigStore().read_pricing())
+    agent.gateway = recorder
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
@@ -144,6 +150,10 @@ def main():
     if not agent.session_id:
         agent.session_id = session_db.create_session()
 
+    # 用量记录器绑定会话
+    recorder._session_db = session_db
+    recorder._session_id = agent.session_id
+
     # ── 日志初始化 ──
     setup_logging(session_id=agent.session_id)
     get_logger().info("session started")
@@ -152,6 +162,9 @@ def main():
         reply = agent.run_conversation(args.message)
         if reply:
             print(reply)
+        stats = recorder.format_summary()
+        if stats:
+            print(f"\n{stats}")
         return
 
     ctx_count = len(agent.context_files)
@@ -175,6 +188,9 @@ def main():
         cmd_registry=cmd_reg,
     )
     loop.run()
+    stats = recorder.format_summary()
+    if stats:
+        print(f"\n{stats}")
     agent.shutdown()
 
 

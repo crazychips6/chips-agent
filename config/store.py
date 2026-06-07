@@ -56,3 +56,9 @@ class ConfigStore:
         for key, env_name in KNOWN_KEYS.items():
             if key in data and not os.getenv(env_name):
                 os.environ[env_name] = str(data[key])
+
+    def read_pricing(self) -> dict | None:
+        """读取 ~/.chips/config.yaml 中的 models.pricing 配置。"""
+        data = self._read()
+        pricing = data.get("models", {}).get("pricing")
+        return pricing if isinstance(pricing, dict) else None

@@ -7,10 +7,6 @@ import re
 import sys
 import time
 from collections import defaultdict
-from types import SimpleNamespace
-
-import openai
-from openai import OpenAI
 
 # 移除 surrogate 字符（如 DeepSeek reasoning_content 中可能出现的 \udce4），
 # 防止后续请求序列化时 UnicodeEncodeError: surrogates not allowed
@@ -24,7 +20,8 @@ logger = logging.getLogger("chips.agent.loop")
 
 from agent.message import ImageBlock, TextBlock, image_file_to_data_uri, parse_user_content, to_openai_messages
 from agent.prompt import PromptBuilder
-from agent.retry import jittered_backoff
+from gateway.protocol import ModelGateway
+from gateway.types import ChatResult
 from memory.manager import MemoryManager
 from safety.audit import log_event
 from session.db import SessionDB
@@ -47,15 +44,20 @@ class AIAgent:
     })
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.deepseek.com",
+        api_key: str = "",
+        base_url: str = "",
         model: str = "deepseek-chat",
         debug_context: bool = False,
         verbose: bool = False,
         stream: bool = False,
         max_retries: int = 3,
+        gateway: ModelGateway | None = None,
     ):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        if gateway:
+            self.gateway = gateway
+        else:
+            from gateway.providers.openai import OpenAIProvider
+            self.gateway = OpenAIProvider(api_key=api_key, base_url=base_url, max_retries=max_retries)
         self.model = model
         self.debug_context = debug_context
         self.verbose = verbose
@@ -77,148 +79,10 @@ class AIAgent:
         # 上下文压缩：消息总字符超限时裁剪历史
         self.max_context_chars: int = 100_000
 
-    # ── LLM 调用（带重试） ──
-
-    def _call_with_retry(self, fn, desc="LLM 调用") -> any:
-        """调用 fn，遇可重试异常时退避重试。"""
-        last_error = None
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                return fn()
-            except openai.BadRequestError as e:
-                raise RuntimeError(f"请求参数错误（不重试）：{e}")
-            except openai.RateLimitError:
-                last_error = "API 速率限制"
-                if attempt < self._max_retries:
-                    delay = jittered_backoff(attempt)
-                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
-                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
-                    time.sleep(delay)
-            except openai.APIStatusError as e:
-                if e.status_code in (502, 503, 504):
-                    last_error = f"服务暂时不可用 ({e.status_code})"
-                    if attempt < self._max_retries:
-                        delay = jittered_backoff(attempt, base_delay=2.0)
-                        logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
-                        print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
-                        time.sleep(delay)
-                else:
-                    raise RuntimeError(f"API 错误 (HTTP {e.status_code}，不重试)：{e}")
-            except openai.APITimeoutError:
-                last_error = "请求超时"
-                if attempt < self._max_retries:
-                    delay = jittered_backoff(attempt, base_delay=2.0)
-                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
-                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
-                    time.sleep(delay)
-            except openai.APIConnectionError:
-                last_error = "网络连接异常"
-                if attempt < self._max_retries:
-                    delay = jittered_backoff(attempt, base_delay=2.0)
-                    logger.warning("llm_call retry attempt=%d/%d reason=%s", attempt, self._max_retries, last_error)
-                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
-                    time.sleep(delay)
-            except openai.BadRequestError as e:
-                raise RuntimeError(f"请求参数错误（不重试）：{e}")
-            except Exception as e:
-                last_error = f"未知错误：{e}"
-                if attempt < self._max_retries:
-                    delay = jittered_backoff(attempt, base_delay=1.0)
-                    print(f"\n  [重试 {attempt}/{self._max_retries}] {last_error}，等待 {delay:.0f}s...", file=sys.stderr)
-                    time.sleep(delay)
-        raise RuntimeError(f"{desc}失败（已重试 {self._max_retries} 次）：{last_error}")
-
-    def _call_llm(self, kwargs) -> any:
-        """非流式调用，带自动重试。"""
-        _res = {}
-        def _do_call():
-            response = self.client.chat.completions.create(**kwargs)
-            _res["response"] = response
-            return response.choices[0].message
-        t0 = time.time()
-        msg = self._call_with_retry(_do_call)
-        elapsed = int((time.time() - t0) * 1000)
-        if "response" in _res:
-            usage = _res["response"].usage
-            pt = usage.prompt_tokens if usage else -1
-            ct = usage.completion_tokens if usage else -1
-            logger.info("llm_call model=%s stream=false duration_ms=%d prompt_tokens=%d completion_tokens=%d",
-                         self.model, elapsed, pt, ct)
-        return msg
-
-    def _call_llm_streaming(self, kwargs) -> any:
-        """流式调用，逐 chunk 输出，带自动重试。"""
-        stream_kwargs = {**kwargs, "stream": True, "stream_options": {"include_usage": True}}
-        _usage = {}
-
-        def _do_stream():
-            stream = self.client.chat.completions.create(**stream_kwargs)
-            content = ""
-            tool_calls: dict[int, dict] = {}
-
-            for chunk in stream:
-                if chunk.usage:
-                    _usage["prompt"] = chunk.usage.prompt_tokens
-                    _usage["completion"] = chunk.usage.completion_tokens
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if not delta:
-                    continue
-
-                if delta.content:
-                    print(delta.content, end="", flush=True)
-                    content += delta.content
-
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in tool_calls:
-                            tool_calls[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                        if tc.id:
-                            tool_calls[idx]["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                tool_calls[idx]["function"]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                tool_calls[idx]["function"]["arguments"] += tc.function.arguments
-
-            msg = SimpleNamespace()
-            msg.content = content
-            msg.reasoning_content = None
-
-            if tool_calls:
-                calls = []
-                for i in sorted(tool_calls.keys()):
-                    tc = tool_calls[i]
-                    func = SimpleNamespace()
-                    func.name = tc["function"]["name"]
-                    func.arguments = tc["function"]["arguments"]
-                    call = SimpleNamespace()
-                    call.id = tc["id"]
-                    call.type = "function"
-                    call.function = func
-                    calls.append(call)
-                msg.tool_calls = calls
-            else:
-                msg.tool_calls = None
-                print()  # 纯文本回复结束后换行
-
-            return msg
-
-        t0 = time.time()
-        msg = self._call_with_retry(_do_stream, desc="流式 LLM 调用")
-        elapsed = int((time.time() - t0) * 1000)
-        pt = _usage.get("prompt", -1)
-        ct = _usage.get("completion", -1)
-        logger.info("llm_call model=%s stream=true duration_ms=%d prompt_tokens=%d completion_tokens=%d",
-                     self.model, elapsed, pt, ct)
-        return msg
-
     # ── 消息构建 ──
 
     def _build_assistant_msg(self, msg) -> dict:
-        """将 API 返回的 assistant 消息转为可追加到 self.messages 的 dict。"""
+        """将 ChatResult / assistant 消息转为可追加到 self.messages 的 dict。"""
         d = {"role": "assistant", "content": _sanitize(msg.content or "")}
         rc = getattr(msg, "reasoning_content", None)
         if rc:
@@ -226,11 +90,11 @@ class AIAgent:
         if msg.tool_calls:
             d["tool_calls"] = [
                 {
-                    "id": tc.id,
+                    "id": tc.get("id", "") if isinstance(tc, dict) else tc.id,
                     "type": "function",
                     "function": {
-                        "name": _sanitize(tc.function.name),
-                        "arguments": _sanitize(tc.function.arguments),
+                        "name": _sanitize(tc["function"]["name"] if isinstance(tc, dict) else tc.function.name),
+                        "arguments": _sanitize(tc["function"]["arguments"] if isinstance(tc, dict) else tc.function.arguments),
                     },
                 }
                 for tc in msg.tool_calls
@@ -361,65 +225,79 @@ class AIAgent:
                     if tools:
                         kwargs["tools"] = tools
 
-                # LLM 调用（统一入口，内部处理 retry/streaming）
-                msg = self._call_llm_streaming(kwargs) if self.stream else self._call_llm(kwargs)
+                # LLM 调用（通过 gateway，内部处理 retry/streaming）
+                if self.stream:
+                    result = self.gateway.chat_stream(
+                        messages=api_messages, model=self.model,
+                        max_tokens=4096, tools=tools if tools else None,
+                        on_chunk=lambda c: print(c, end="", flush=True),
+                    )
+                    # 纯文本流式输出结束后换行
+                    if not result.tool_calls:
+                        print()
+                else:
+                    result = self.gateway.chat(
+                        messages=api_messages, model=self.model,
+                        max_tokens=4096, tools=tools if tools else None,
+                    )
 
                 if self.debug_context:
-                    rounds.append({"request": kwargs, "response": {"content": msg.content, "reasoning_content": getattr(msg, "reasoning_content", None), "tool_calls": [{"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}} for tc in (msg.tool_calls or [])]}})
+                    rounds.append({"request": {"model": self.model, "messages": api_messages, "max_tokens": 4096, "tools": tools if tools else None}, "response": {"content": result.content, "reasoning_content": result.reasoning_content, "tool_calls": result.tool_calls}})
                     with open(_DEBUG_LOG, "w") as f:
                         json.dump(rounds, f, ensure_ascii=False, indent=2)
 
-                if msg.tool_calls:
-                    self.messages.append(self._build_assistant_msg(msg))
-                    for tc in msg.tool_calls:
+                if result.tool_calls:
+                    self.messages.append(self._build_assistant_msg(result))
+                    for tc in result.tool_calls:
                         try:
-                            args = json.loads(tc.function.arguments)
+                            args = json.loads(tc["function"]["arguments"])
                         except json.JSONDecodeError:
                             args = {}
                         args_str = json.dumps(args, sort_keys=True) if args else "{}"
 
                         # 死循环检测
-                        if self._detect_tool_loop(tc.function.name, args_str):
+                        if self._detect_tool_loop(tc["function"]["name"], args_str):
                             self.messages.append({
                                 "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": f"错误：工具 {tc.function.name} 已被连续调用 {_MAX_TOOL_LOOP} 次，疑似死循环。请换一种方式解决问题。",
+                                "tool_call_id": tc["id"],
+                                "content": f"错误：工具 {tc['function']['name']} 已被连续调用 {_MAX_TOOL_LOOP} 次，疑似死循环。请换一种方式解决问题。",
                             })
                             self._save_pending()
                             # 继续循环让 LLM 有机会看到错误信息并调整策略
                             continue
 
-                        if self.memory_manager.has_tool(tc.function.name):
+                        name = tc["function"]["name"]
+                        if self.memory_manager.has_tool(name):
                             t0 = time.time()
-                            result = self.memory_manager.handle_tool_call(tc.function.name, args)
+                            tool_result = self.memory_manager.handle_tool_call(name, args)
                             elapsed = int((time.time() - t0) * 1000)
-                            logger.info("tool=%s source=memory_manager duration_ms=%d", tc.function.name, elapsed)
+                            logger.info("tool=%s source=memory_manager duration_ms=%d", name, elapsed)
                         else:
                             t0 = time.time()
-                            result = self.registry.dispatch(tc.function.name, args)
+                            tool_result = self.registry.dispatch(name, args)
                             elapsed = int((time.time() - t0) * 1000)
-                            logger.info("tool=%s source=registry duration_ms=%d", tc.function.name, elapsed)
+                            logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
                         log_event("tool_call", {
-                            "tool": tc.function.name,
+                            "tool": name,
                             "args_truncated": args_str[:200],
                             "session_id": self.session_id,
                         })
                         self.messages.append({
                             "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": result,
+                            "tool_call_id": tc["id"],
+                            "content": tool_result,
                         })
                         # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
-                        self._maybe_inject_image(result)
+                        self._maybe_inject_image(tool_result)
                     self._save_pending()
                 else:
-                    content = msg.content or ""
-                    self.messages.append(self._build_assistant_msg(msg))
+                    content = result.content or ""
+                    self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
                     last_text_reply = content
                     if content:
                         if self.stream:
-                            return ""  # 已由 _call_llm_streaming 实时输出
+                            return ""  # 已由 chat_stream 的 on_chunk 实时输出
                         return content
                     return ""
 

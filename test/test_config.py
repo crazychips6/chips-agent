@@ -77,6 +77,21 @@ class TestConfigStore:
         assert KNOWN_KEYS["model"] == "CHIPS_MODEL"
         assert KNOWN_KEYS["base_url"] == "CHIPS_BASE_URL"
 
+    def test_read_pricing_none(self, tmp_config):
+        """没有配置 pricing 时返回 None。"""
+        store = ConfigStore(tmp_config)
+        assert store.read_pricing() is None
+
+    def test_read_pricing(self, tmp_config):
+        """正确读取嵌套的 models.pricing 配置。"""
+        cfg = {"models": {"pricing": {"deepseek-chat": {"input": 0.001, "output": 0.002}}}}
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        store = ConfigStore(tmp_config)
+        pricing = store.read_pricing()
+        assert pricing is not None
+        assert pricing["deepseek-chat"]["input"] == 0.001
+
 
 class TestConfigCli:
     """测试 handle_config 函数的输出行为。"""

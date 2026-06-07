@@ -1,39 +1,24 @@
-"""AIAgent 循环测试 — mock OpenAI 客户端，验证 prompt 组装和 ReAct 行为"""
+"""AIAgent 循环测试 — mock gateway，验证 prompt 组装和 ReAct 行为"""
 
 from unittest.mock import MagicMock, patch
 
-import openai
 import pytest
 
 from agent.loop import AIAgent
 from agent.message import ImageBlock, TextBlock
+from gateway.types import ChatResult
 
 
 @pytest.fixture
-def mock_openai():
-    with patch("agent.loop.OpenAI") as mock:
-        client = MagicMock()
-        mock.return_value = client
-        yield client
-
-
-@pytest.fixture
-def mock_openai_raw():
-    """mock 整个 openai 模块，包括异常类。"""
-    with patch("agent.loop.openai") as mock:
-        yield mock
-
-
-@pytest.fixture
-def mock_openai():
-    with patch("agent.loop.OpenAI") as mock:
-        client = MagicMock()
-        mock.return_value = client
-        yield client
+def mock_gateway():
+    """提供 mock 的 gateway，避免实际 API 调用。"""
+    gw = MagicMock()
+    gw.chat.return_value = ChatResult(content="回复")
+    return gw
 
 
 def _make_msg(content: str | None, tool_calls=None, reasoning_content=None):
-    """构造模拟的 LLM response message。"""
+    """构造模拟的 LLM response message（兼容 ChatResult + SimpleNamespace）。"""
     msg = MagicMock()
     msg.content = content
     msg.reasoning_content = reasoning_content
@@ -42,12 +27,12 @@ def _make_msg(content: str | None, tool_calls=None, reasoning_content=None):
 
 
 def _make_tool_call(id: str, name: str, args: str):
-    tc = MagicMock()
-    tc.id = id
-    tc.type = "function"
-    tc.function.name = name
-    tc.function.arguments = args
-    return tc
+    """构造 dict 格式的 tool_call（ChatResult 兼容）。"""
+    return {
+        "id": id,
+        "type": "function",
+        "function": {"name": name, "arguments": args},
+    }
 
 
 class TestBuildAssistantMsg:
@@ -73,13 +58,29 @@ class TestBuildAssistantMsg:
         """没有 reasoning_content 时不添加该字段。"""
         agent = AIAgent(api_key="test-key")
         msg = _make_msg(content="回复")
-        # 不设置 reasoning_content，getattr 回退到 None
         d = agent._build_assistant_msg(msg)
         assert "reasoning_content" not in d
 
-    def test_tool_calls(self):
+    def test_tool_calls_dict(self):
+        """ChatResult 格式的 dict tool_calls 正确转换。"""
         agent = AIAgent(api_key="test-key")
-        tc = _make_tool_call("call_1", "echo", '{"text":"hello"}')
+        result = ChatResult(
+            content=None,
+            tool_calls=[_make_tool_call("call_1", "echo", '{"text":"hello"}')],
+        )
+        d = agent._build_assistant_msg(result)
+        assert d["content"] == ""
+        assert len(d["tool_calls"]) == 1
+        assert d["tool_calls"][0]["function"]["name"] == "echo"
+
+    def test_tool_calls_magicmock(self):
+        """MagicMock 兼容格式也正常处理。"""
+        agent = AIAgent(api_key="test-key")
+        tc = MagicMock()
+        tc.id = "call_1"
+        tc.type = "function"
+        tc.function.name = "echo"
+        tc.function.arguments = '{"text":"hello"}'
         msg = _make_msg(content=None, tool_calls=[tc])
         d = agent._build_assistant_msg(msg)
         assert d["content"] == ""
@@ -90,14 +91,11 @@ class TestBuildAssistantMsg:
 class TestRunConversation:
     """run_conversation 的 prompt 组装与 ReAct 流程。"""
 
-    def test_prompt_has_all_layers(self, mock_openai):
-        """有记忆/上下文/工具时，7 层全部出现在 system prompt 中。"""
-        msg = _make_msg(content="回复")
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
+    def test_prompt_has_all_layers(self, mock_gateway):
+        """有记忆/上下文/工具时，全部层出现在 system prompt 中。"""
+        mock_gateway.chat.return_value = ChatResult(content="回复")
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = [
             {"function": {"name": "echo", "description": "回显"}}
@@ -111,20 +109,17 @@ class TestRunConversation:
 
         agent.run_conversation("hi")
 
-        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        call_kwargs = mock_gateway.chat.call_args[1]
         system = call_kwargs["messages"][0]["content"]
         for layer in ("核心身份", "当前日期", "持久记忆",
                       "项目上下文", "调用约定"):
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
-    def test_prompt_layers_conditional(self, mock_openai):
+    def test_prompt_layers_conditional(self, mock_gateway):
         """无记忆、无上下文、无工具时，只有 3 个必现层。"""
-        msg = _make_msg(content="ok")
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
+        mock_gateway.chat.return_value = ChatResult(content="ok")
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
@@ -132,7 +127,7 @@ class TestRunConversation:
 
         agent.run_conversation("hi")
 
-        call_kwargs = mock_openai.chat.completions.create.call_args[1]
+        call_kwargs = mock_gateway.chat.call_args[1]
         system = call_kwargs["messages"][0]["content"]
         assert "# 核心身份" in system
         assert "# 当前日期" in system
@@ -141,14 +136,11 @@ class TestRunConversation:
         assert "# 项目上下文" not in system
         assert "# 工具规则" not in system
 
-    def test_memory_none_no_crash(self, mock_openai):
+    def test_memory_none_no_crash(self, mock_gateway):
         """memory 为 None 时不崩溃。"""
-        msg = _make_msg(content="ok")
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
+        mock_gateway.chat.return_value = ChatResult(content="ok")
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
@@ -156,28 +148,20 @@ class TestRunConversation:
         reply = agent.run_conversation("hi")
         assert reply == "ok"
 
-    def test_react_tool_call_loop(self, mock_openai):
+    def test_react_tool_call_loop(self, mock_gateway):
         """模拟 tool_call → dispatch → 继续 → 文本回复 的 ReAct 流程。"""
-        tc = _make_tool_call("c1", "echo", '{"text":"ping"}')
-        msg1 = _make_msg(content=None, tool_calls=[tc])
-        msg2 = _make_msg(content="pong")
-
-        mock_openai.chat.completions.create.side_effect = [
-            MagicMock(choices=[MagicMock(message=msg1)]),
-            MagicMock(choices=[MagicMock(message=msg2)]),
+        mock_gateway.chat.side_effect = [
+            ChatResult(content=None, tool_calls=[_make_tool_call("c1", "echo", '{"text":"ping"}')]),
+            ChatResult(content="pong"),
         ]
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.dispatch.return_value = "ping"
         agent.registry.get_definitions.return_value = [
             {"function": {"name": "echo", "description": "回显"}}
         ]
         agent.tool_names = {"echo"}
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         reply = agent.run_conversation("echo ping")
         assert reply == "pong"
@@ -185,26 +169,20 @@ class TestRunConversation:
         # dispatch 被调用一次，参数正确
         agent.registry.dispatch.assert_called_once_with("echo", {"text": "ping"})
 
-    def test_max_iterations(self, mock_openai):
+    def test_max_iterations(self, mock_gateway):
         """LLM 一直返回 tool_call 时触发最大迭代限制。"""
-        tc = _make_tool_call("c1", "echo", '{"text":"x"}')
-        msg = _make_msg(content=None, tool_calls=[tc])
-
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
+        mock_gateway.chat.return_value = ChatResult(
+            content=None,
+            tool_calls=[_make_tool_call("c1", "echo", '{"text":"x"}')],
         )
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.dispatch.return_value = "x"
         agent.registry.get_definitions.return_value = [
             {"function": {"name": "echo", "description": "回显"}}
         ]
         agent.tool_names = {"echo"}
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         reply = agent.run_conversation("start", max_iterations=3)
         assert "最大迭代次数" in reply
@@ -230,18 +208,20 @@ class TestConstructor:
         agent = AIAgent(api_key="test-key")
         assert agent._max_retries == 3
 
+    def test_gateway_injection(self):
+        """注入的 gateway 被正确使用。"""
+        gw = MagicMock()
+        agent = AIAgent(gateway=gw)
+        assert agent.gateway is gw
+
 
 class TestVisionCapability:
-    def test_non_vision_model_rejects_image_block(self, mock_openai):
+    def test_non_vision_model_rejects_image_block(self, mock_gateway):
         """deepseek-chat 不支持 vision，消息含图片时报错。"""
-        agent = AIAgent(api_key="test-key", model="deepseek-chat")
+        agent = AIAgent(gateway=mock_gateway, model="deepseek-chat")
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         agent.messages.append({
             "role": "user",
@@ -254,25 +234,14 @@ class TestVisionCapability:
         with pytest.raises(ValueError, match="不支持 vision"):
             agent.run_conversation("")
 
-    def test_vision_model_allows_image_block(self, mock_openai):
+    def test_vision_model_allows_image_block(self, mock_gateway):
         """gpt-4o 支持 vision，消息含图片不报错。"""
-        msg = MagicMock()
-        msg.content = "看到了"
-        msg.reasoning_content = None
-        msg.tool_calls = None
+        mock_gateway.chat.return_value = ChatResult(content="看到了")
 
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
-
-        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        agent = AIAgent(gateway=mock_gateway, model="gpt-4o")
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         agent.messages.append({
             "role": "user",
@@ -285,25 +254,14 @@ class TestVisionCapability:
         reply = agent.run_conversation("")
         assert reply == "看到了"
 
-    def test_non_vision_model_text_only_ok(self, mock_openai):
+    def test_non_vision_model_text_only_ok(self, mock_gateway):
         """纯文本消息，非 vision 模型正常通过。"""
-        msg = MagicMock()
-        msg.content = "你好"
-        msg.reasoning_content = None
-        msg.tool_calls = None
+        mock_gateway.chat.return_value = ChatResult(content="你好")
 
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
-
-        agent = AIAgent(api_key="test-key", model="deepseek-chat")
+        agent = AIAgent(gateway=mock_gateway, model="deepseek-chat")
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         reply = agent.run_conversation("hi")
         assert reply == "你好"
@@ -335,24 +293,14 @@ class TestImageInjection:
         result = "截图已保存到 /nonexistent/path.png（使用 test）"
         assert AIAgent._extract_screenshot_path(result) is None
 
-    def test_maybe_inject_image_skips_non_screenshot(self, mock_openai):
+    def test_maybe_inject_image_skips_non_screenshot(self, mock_gateway):
         """非截图结果不注入图片。"""
-        msg = MagicMock()
-        msg.content = "ok"
-        msg.reasoning_content = None
-        msg.tool_calls = None
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
+        mock_gateway.chat.return_value = ChatResult(content="ok")
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         agent.run_conversation("hi")
         # 不应注入 user message
@@ -360,38 +308,20 @@ class TestImageInjection:
         for msg in user_msgs:
             assert isinstance(msg.get("content"), str)  # 都是纯文本
 
-    def test_maybe_inject_image_screenshot(self, mock_openai, tmp_path):
+    def test_maybe_inject_image_screenshot(self, mock_gateway, tmp_path):
         """截图工具返回有效路径 → 注入 ImageBlock。"""
         img = tmp_path / "screenshot.png"
         img.write_bytes(b"fake-png")
 
-        tc = MagicMock()
-        tc.id = "c1"
-        tc.type = "function"
-        tc.function.name = "screenshot"
-        tc.function.arguments = "{}"
-        msg1 = MagicMock()
-        msg1.content = None
-        msg1.reasoning_content = None
-        msg1.tool_calls = [tc]
-        msg2 = MagicMock()
-        msg2.content = "图片分析结果"
-        msg2.reasoning_content = None
-        msg2.tool_calls = None
-
-        mock_openai.chat.completions.create.side_effect = [
-            MagicMock(choices=[MagicMock(message=msg1)]),
-            MagicMock(choices=[MagicMock(message=msg2)]),
+        mock_gateway.chat.side_effect = [
+            ChatResult(content=None, tool_calls=[_make_tool_call("c1", "screenshot", "{}")]),
+            ChatResult(content="图片分析结果"),
         ]
 
-        agent = AIAgent(api_key="test-key", model="gpt-4o")
+        agent = AIAgent(gateway=mock_gateway, model="gpt-4o")
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         # mock dispatch 返回截图路径
         agent.registry.dispatch.return_value = f"截图已保存到 {img}（使用 mock）"
@@ -405,46 +335,6 @@ class TestImageInjection:
             any(getattr(b, "type", "") == "image_url" for b in m["content"])
             for m in user_msgs
         )
-
-
-class TestCallWithRetry:
-    def test_normal_call_succeeds(self):
-        agent = AIAgent(api_key="test-key")
-        result = agent._call_with_retry(lambda: "ok", desc="test")
-        assert result == "ok"
-
-    def test_rate_limit_retry_then_succeed(self, mock_openai):
-        """模拟 RateLimitError 一次后重试成功。"""
-        agent = AIAgent(api_key="test-key", max_retries=2)
-        calls = []
-
-        def _fn():
-            calls.append(1)
-            if len(calls) == 1:
-                raise openai.RateLimitError("rate limited", response=MagicMock(), body=None)
-            return "ok after retry"
-
-        result = agent._call_with_retry(_fn, desc="test")
-        assert result == "ok after retry"
-        assert len(calls) == 2
-
-    def test_bad_request_not_retried(self):
-        """400 错误不重试，直接抛。"""
-        agent = AIAgent(api_key="test-key")
-        with pytest.raises(RuntimeError, match="请求参数错误"):
-            agent._call_with_retry(
-                lambda: (_ for _ in ()).throw(openai.BadRequestError("bad req", response=MagicMock(), body=None)),
-                desc="test",
-            )
-
-    def test_exhaust_retries(self):
-        """连续失败达到最大重试次数后抛异常。"""
-        agent = AIAgent(api_key="test-key", max_retries=2)
-        with pytest.raises(RuntimeError, match="失败"):
-            agent._call_with_retry(
-                lambda: (_ for _ in ()).throw(openai.RateLimitError("always fail", response=MagicMock(), body=None)),
-                desc="test",
-            )
 
 
 class TestToolLoopDetection:
@@ -466,24 +356,14 @@ class TestToolLoopDetection:
         for i in range(5):
             assert agent._detect_tool_loop("echo", f'{{"text":"bye_{i}"}}') is False
 
-    def test_reset_on_new_conversation(self, mock_openai):
+    def test_reset_on_new_conversation(self, mock_gateway):
         """新对话重置循环计数器。"""
-        msg = MagicMock()
-        msg.content = "ok"
-        msg.reasoning_content = None
-        msg.tool_calls = None
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
-        )
+        mock_gateway.chat.return_value = ChatResult(content="ok")
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.get_definitions.return_value = []
         agent.tool_names = set()
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         agent.run_conversation("hi")
         # 上一轮如果有工具循环，新对话不应继承
@@ -491,111 +371,22 @@ class TestToolLoopDetection:
 
 
 class TestMaxIterationsWithText:
-    def test_returns_generic_message_on_exhaustion(self, mock_openai):
+    def test_returns_generic_message_on_exhaustion(self, mock_gateway):
         """只有 tool_call 时达到上限返回通用提示。"""
-        tc = MagicMock()
-        tc.id = "c1"
-        tc.type = "function"
-        tc.function.name = "echo"
-        tc.function.arguments = '{"text":"x"}'
-
-        msg = MagicMock()
-        msg.content = None
-        msg.reasoning_content = None
-        msg.tool_calls = [tc]
-
-        mock_openai.chat.completions.create.return_value = MagicMock(
-            choices=[MagicMock(message=msg)]
+        mock_gateway.chat.return_value = ChatResult(
+            content=None,
+            tool_calls=[_make_tool_call("c1", "echo", '{"text":"x"}')],
         )
 
-        agent = AIAgent(api_key="test-key")
+        agent = AIAgent(gateway=mock_gateway)
         agent.registry = MagicMock()
         agent.registry.dispatch.return_value = "done"
         agent.registry.get_definitions.return_value = [{"function": {"name": "echo"}}]
         agent.tool_names = {"echo"}
-        agent.memory = MagicMock()
-        agent.memory.get_memory.return_value = ""
-        agent.memory.get_user.return_value = ""
-        agent.memory.get_episodic.return_value = ""
 
         reply = agent.run_conversation("start", max_iterations=3)
         assert "最大迭代次数" in reply
         assert "简化请求" in reply
-
-
-class TestStreaming:
-    def test_stream_accumulates_content(self, mock_openai):
-        """流式调用正确累积分块内容。"""
-        # 构造流式 chunk
-        chunks = []
-        for text in ["Hello", " ", "World", "!"]:
-            chunk = MagicMock()
-            choice = MagicMock()
-            delta = MagicMock()
-            delta.content = text
-            delta.tool_calls = None
-            choice.delta = delta
-            choice.finish_reason = None
-            chunk.choices = [choice]
-            chunks.append(chunk)
-
-        # 最后一个 chunk finish_reason=stop
-        chunks[-1].choices[0].finish_reason = "stop"
-
-        mock_openai.chat.completions.create.return_value = chunks
-
-        agent = AIAgent(api_key="test-key", stream=True)
-        msg = agent._call_llm_streaming({"model": "test", "messages": [{"role": "user", "content": "hi"}]})
-
-        assert msg.content == "Hello World!"
-        assert msg.tool_calls is None
-
-    def test_stream_accumulates_tool_calls(self, mock_openai):
-        """流式调用正确累积分块的 tool_calls。"""
-        chunk1 = MagicMock()
-        c1 = MagicMock()
-        c1.delta.content = None
-        c1.delta.tool_calls = None
-        c1.finish_reason = None
-        chunk1.choices = [c1]
-
-        # tool_call 分块: 先发 id 和 name
-        chunk2 = MagicMock()
-        c2 = MagicMock()
-        c2.delta.content = None
-        tc2 = MagicMock()
-        tc2.index = 0
-        tc2.id = "call_1"
-        tc2.function.name = "echo"
-        tc2.function.arguments = ""
-        c2.delta.tool_calls = [tc2]
-        c2.finish_reason = None
-        chunk2.choices = [c2]
-
-        # tool_call 分块: 发 arguments
-        chunk3 = MagicMock()
-        c3 = MagicMock()
-        c3.delta.content = None
-        tc3 = MagicMock()
-        tc3.index = 0
-        tc3.id = ""
-        tc3.function.name = ""
-        tc3.function.arguments = '{"text":"hello"}'
-        c3.delta.tool_calls = [tc3]
-        c3.finish_reason = "tool_calls"
-        chunk3.choices = [c3]
-
-        mock_openai.chat.completions.create.return_value = [chunk1, chunk2, chunk3]
-
-        agent = AIAgent(api_key="test-key", stream=True)
-        msg = agent._call_llm_streaming({"model": "test", "messages": []})
-
-        assert msg.content == ""
-        assert msg.tool_calls is not None
-        assert len(msg.tool_calls) == 1
-        assert msg.tool_calls[0].id == "call_1"
-        assert msg.tool_calls[0].function.name == "echo"
-        assert msg.tool_calls[0].function.arguments == '{"text":"hello"}'
 
 
 class TestTrimContext:

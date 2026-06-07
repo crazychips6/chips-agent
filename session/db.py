@@ -68,6 +68,20 @@ class SessionDB:
                     INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
                     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
                 END;
+
+                CREATE TABLE IF NOT EXISTS usage_log (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    model           TEXT NOT NULL,
+                    prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    latency_ms      INTEGER NOT NULL DEFAULT 0,
+                    cost_estimate   REAL DEFAULT 0.0,
+                    created_at      REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_usage_session
+                    ON usage_log(session_id, id);
             """)
 
     # ── Session CRUD ──
@@ -234,6 +248,46 @@ class SessionDB:
                 ).fetchall()
 
         return [dict(r) for r in rows]
+
+    # ── Usage Log ──
+
+    def insert_usage(self, session_id: str, model: str,
+                     prompt_tokens: int, completion_tokens: int,
+                     latency_ms: int, cost_estimate: float = 0.0):
+        """记录一次 LLM 调用用量。"""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO usage_log (session_id, model, prompt_tokens, "
+                "completion_tokens, latency_ms, cost_estimate, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, model, prompt_tokens, completion_tokens,
+                 latency_ms, cost_estimate, time.time()),
+            )
+
+    def get_session_usage(self, session_id: str) -> list[dict]:
+        """获取指定会话的所有用量记录。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM usage_log WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_session_stats(self, session_id: str) -> dict:
+        """获取指定会话的聚合统计。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS call_count, "
+                "COALESCE(SUM(prompt_tokens), 0) AS total_prompt, "
+                "COALESCE(SUM(completion_tokens), 0) AS total_completion, "
+                "COALESCE(SUM(cost_estimate), 0) AS total_cost "
+                "FROM usage_log WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else {
+            "call_count": 0, "total_prompt": 0,
+            "total_completion": 0, "total_cost": 0.0,
+        }
 
     # ── Helpers ──
 

@@ -212,3 +212,43 @@ class TestEdgeCases:
         assert isinstance(history[0]["content"], list)
         assert history[0]["content"][0]["type"] == "text"
         assert history[0]["content"][1]["type"] == "image_url"
+
+
+class TestUsageLog:
+    """usage_log 表的插入和查询。"""
+
+    def test_insert_and_query(self, db):
+        sid = db.create_session()
+        db.insert_usage(sid, "deepseek-chat", 100, 50, 200, 0.0001)
+        db.insert_usage(sid, "deepseek-chat", 200, 30, 150, 0.0002)
+
+        rows = db.get_session_usage(sid)
+        assert len(rows) == 2
+        assert rows[0]["prompt_tokens"] == 100
+        assert rows[1]["completion_tokens"] == 30
+
+    def test_get_stats(self, db):
+        sid = db.create_session()
+        db.insert_usage(sid, "deepseek-chat", 500, 200, 1000, 0.001)
+        db.insert_usage(sid, "deepseek-chat", 300, 100, 500, 0.0005)
+
+        stats = db.get_session_stats(sid)
+        assert stats["call_count"] == 2
+        assert stats["total_prompt"] == 800
+        assert stats["total_completion"] == 300
+        assert stats["total_cost"] == 0.0015
+
+    def test_empty_session_stats(self, db):
+        sid = db.create_session()
+        stats = db.get_session_stats(sid)
+        assert stats["call_count"] == 0
+        assert stats["total_prompt"] == 0
+        assert stats["total_cost"] == 0.0
+
+    def test_isolated_per_session(self, db):
+        s1 = db.create_session()
+        s2 = db.create_session()
+        db.insert_usage(s1, "a", 10, 0, 0)
+        db.insert_usage(s2, "b", 20, 0, 0)
+        assert len(db.get_session_usage(s1)) == 1
+        assert len(db.get_session_usage(s2)) == 1
