@@ -55,6 +55,17 @@ def _build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("key", help="配置键名")
     config_set.add_argument("value", help="配置值")
 
+    # 子命令：chips plugin list/install/remove/info
+    plugin_cmd = subparsers.add_parser("plugin", help="管理插件")
+    plugin_sub = plugin_cmd.add_subparsers(dest="plugin_action", required=True)
+    plugin_sub.add_parser("list", help="列出已安装插件")
+    plugin_install = plugin_sub.add_parser("install", help="安装插件（复制 .py 到 ~/.chips/plugins/）")
+    plugin_install.add_argument("path_or_package", help="插件文件路径")
+    plugin_remove = plugin_sub.add_parser("remove", help="卸载插件")
+    plugin_remove.add_argument("name", help="插件名（不含 .py）")
+    plugin_info = plugin_sub.add_parser("info", help="查看插件详情")
+    plugin_info.add_argument("name", help="插件名（不含 .py）")
+
     # 子命令：chips session list/show/search/delete
     session_cmd = subparsers.add_parser("session", help="管理会话")
     session_sub = session_cmd.add_subparsers(dest="session_action", required=True)
@@ -98,6 +109,10 @@ def main():
         from session.cli import handle_session
         handle_session(args)
         return
+    if args.command == "plugin":
+        from plugins.cli import handle_plugin
+        handle_plugin(args)
+        return
 
     if args.version:
         print("chips 0.3.0")
@@ -133,6 +148,8 @@ def main():
         from agent.logger import get_logger
         get_logger().info("plugins_loaded count=%d", loaded)
     agent.plugin_manager = plugin_mgr
+    # 插件注册的工具需要额外加入 agent 可用工具列表
+    agent.tool_names |= plugin_mgr.plugin_tool_names
 
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env

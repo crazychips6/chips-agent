@@ -9,6 +9,9 @@
     pm.add_default_paths()
     count = pm.load_all()
     print(f"已加载 {count} 个插件")
+
+插件文件需导出 ``register(ctx: PluginContext)`` 函数，
+内部调用 ``ctx.register_tool()`` / ``ctx.register_hook()``。
 """
 
 from __future__ import annotations
@@ -17,9 +20,8 @@ import importlib.util
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
-from plugins.protocol import HookPlugin, ToolPlugin
+from plugins.protocol import HookPlugin, PluginContext
 from tool.registry import ToolRegistry
 
 logger = logging.getLogger("chips.plugins.manager")
@@ -30,24 +32,32 @@ class PluginManager:
 
     职责：
     1. 扫描指定目录发现插件文件
-    2. 加载插件并将 ToolPlugin 注册到 ToolRegistry
+    2. 加载插件并调用 ``register(ctx)`` 将工具注册到 ToolRegistry
     3. 管理 HookPlugin 列表并分发生命周期钩子
     """
 
     def __init__(self, registry: ToolRegistry | None = None):
         self._registry = registry
         self._scan_paths: list[str] = []
-        self._tool_plugins: dict[str, ToolPlugin] = {}
+        self._plugin_tool_names: set[str] = set()
         self._hook_plugins: list[HookPlugin] = []
         self._loaded_files: set[str] = set()
 
     # ── 路径管理 ──
 
     def add_scan_path(self, path: str) -> None:
-        """添加插件扫描目录。路径支持 ``~`` 展开。"""
+        """添加插件扫描目录。路径支持 ``~`` 展开。
+
+        跳过 Python 包目录（含 ``__init__.py``），避免将系统包当作插件目录。
+        """
         resolved = os.path.abspath(os.path.expanduser(path))
-        if os.path.isdir(resolved) and resolved not in self._scan_paths:
-            self._scan_paths.append(resolved)
+        if not os.path.isdir(resolved) or resolved in self._scan_paths:
+            return
+        # Python 包目录有 __init__.py，不是插件放置目录
+        if os.path.isfile(os.path.join(resolved, "__init__.py")):
+            logger.debug("scan_path_skipped_package dir=%s", resolved)
+            return
+        self._scan_paths.append(resolved)
 
     def add_default_paths(self) -> None:
         """添加默认扫描路径：``~/.chips/plugins/`` 和 ``./plugins/``。"""
@@ -73,7 +83,7 @@ class PluginManager:
     def load(self, filepath: str) -> bool:
         """加载单个插件文件。成功返回 True。
 
-        文件需导出 ``__plugin__`` 属性（ToolPlugin / HookPlugin 实例或列表）。
+        文件需导出 ``register(ctx: PluginContext)`` 函数。
         """
         filepath = os.path.abspath(filepath)
         if filepath in self._loaded_files:
@@ -93,38 +103,25 @@ class PluginManager:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
 
-            plugin = getattr(module, "__plugin__", None)
-            if plugin is None:
-                logger.warning("plugin_no___plugin__ path=%s", filepath)
+            register_fn = getattr(module, "register", None)
+            if not callable(register_fn):
+                logger.warning("plugin_no_register_fn path=%s", filepath)
                 return False
 
-            instances: list = []
-            if isinstance(plugin, (list, tuple)):
-                instances = list(plugin)
-            else:
-                instances = [plugin]
+            ctx = PluginContext(registry=self._registry)
+            register_fn(ctx)
 
-            loaded = False
-            for inst in instances:
-                if isinstance(inst, ToolPlugin):
-                    self._register_tool_plugin(inst)
-                    loaded = True
-                if isinstance(inst, HookPlugin):
-                    self._hook_plugins.append(inst)
-                    loaded = True
-
-            if not loaded:
-                logger.warning(
-                    "plugin_no_matching_type path=%s type=%s",
-                    filepath, type(plugin).__name__,
-                )
-                return False
-
+            self._plugin_tool_names.update(ctx._tool_names)
+            self._hook_plugins.extend(ctx._hook_plugins)
             self._loaded_files.add(filepath)
-            logger.info("plugin_loaded path=%s", filepath)
 
-            # on_register 通知所有 HookPlugin
-            for hook in self._hook_plugins:
+            logger.info(
+                "plugin_loaded path=%s tools=%d hooks=%d",
+                filepath, len(ctx._tool_names), len(ctx._hook_plugins),
+            )
+
+            # 对新注册的 HookPlugin 调用 on_register
+            for hook in ctx._hook_plugins:
                 if hasattr(hook, "on_register"):
                     try:
                         hook.on_register(self._registry)
@@ -147,43 +144,11 @@ class PluginManager:
                 count += 1
         return count
 
-    # ── ToolPlugin 管理 ──
-
-    def _register_tool_plugin(self, plugin: ToolPlugin) -> None:
-        """将 ToolPlugin 的工具注册到 ToolRegistry。"""
-        name = plugin.name
-        self._tool_plugins[name] = plugin
-
-        if self._registry is None:
-            return
-
-        defs = plugin.tool_definitions()
-        for schema in defs:
-            tool_name = (
-                schema.get("function", {}).get("name")
-                or schema.get("name")
-            )
-            if not tool_name:
-                continue
-            # 用默认参数捕获当前循环变量
-            self._registry.register(
-                name=tool_name,
-                toolset="plugin",
-                schema=schema,
-                handler=lambda args, p=plugin, n=tool_name: p.execute(n, args),
-            )
-            logger.debug(
-                "tool_registered_from_plugin plugin=%s tool=%s", name, tool_name,
-            )
+    # ── 工具查询 ──
 
     def has_tool(self, tool_name: str) -> bool:
-        """是否有 ToolPlugin 提供此工具。"""
-        for plugin in self._tool_plugins.values():
-            for schema in plugin.tool_definitions():
-                sn = schema.get("function", {}).get("name") or schema.get("name", "")
-                if sn == tool_name:
-                    return True
-        return False
+        """是否有插件注册了此工具。"""
+        return tool_name in self._plugin_tool_names
 
     # ── Hook 调度 ──
 
@@ -248,9 +213,9 @@ class PluginManager:
     # ── 查询 ──
 
     @property
-    def tool_plugin_names(self) -> set[str]:
-        """已加载 ToolPlugin 的名称集合。"""
-        return set(self._tool_plugins.keys())
+    def plugin_tool_names(self) -> set[str]:
+        """已注册插件工具的名称集合。"""
+        return set(self._plugin_tool_names)
 
     @property
     def hook_count(self) -> int:

@@ -1,41 +1,16 @@
-"""Plugin 协议定义 — ToolPlugin 和 HookPlugin 接口
+"""Plugin 协议定义 — HookPlugin 接口 + PluginContext
 
 插件是 Python 文件，放在 ~/.chips/plugins/ 或 ./plugins/ 目录下，
-导出 ``__plugin__`` 属性（实现 ToolPlugin 或 HookPlugin 协议的实例）。
+导出 ``register(ctx: PluginContext)`` 函数。
 
 约定：
-  - 文件名即插件名，但插件自身 ``.name`` 属性是独立标识
-  - __plugin__ 可以是单个实例，也可以是 list[ToolPlugin | HookPlugin]
+  - 文件名即插件名
+  - ``register(ctx)`` 内部调用 ``ctx.register_tool()`` / ``ctx.register_hook()``
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
-
-
-@runtime_checkable
-class ToolPlugin(Protocol):
-    """提供工具的插件。
-
-    每个 ToolPlugin 定义一个或多个工具的 schema 和实现。
-    加载后，PluginManager 会自动将工具注册到 ToolRegistry。
-    """
-
-    name: str
-    description: str
-
-    def tool_definitions(self) -> list[dict]:
-        """返回工具 schema 列表（OpenAI function-calling 格式）。
-
-        每个 dict 格式：:
-
-            {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
-        """
-        ...
-
-    def execute(self, tool_name: str, args: dict[str, Any]) -> str:
-        """执行工具调用，返回结果字符串。"""
-        ...
+from typing import Any, Callable, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -43,39 +18,71 @@ class HookPlugin(Protocol):
     """挂钩到 agent 生命周期的插件。"""
 
     def on_register(self, registry) -> None:
-        """插件被加载时调用，可在此处访问 registry。"""
         ...
 
     def on_tool_call_pre(
         self, tool_name: str, args: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """工具调用前触发。
-
-        Args:
-            tool_name: 将要调用的工具名
-            args: 当前参数
-
-        Returns:
-            修改后的 args，或 None 表示不干预。
-        """
         ...
 
     def on_tool_call_post(self, tool_name: str, result: str) -> str | None:
-        """工具调用后触发。
-
-        Returns:
-            修改后的结果字符串，或 None 表示不干预。
-        """
         ...
 
     def on_response(self, response: str) -> str | None:
-        """LLM 返回文本响应后触发。
-
-        Returns:
-            修改后的响应，或 None 表示不干预。
-        """
         ...
 
     def on_session_end(self, messages: list[dict]) -> None:
-        """对话结束时触发，可在此处做清理或记录。"""
         ...
+
+
+class PluginContext:
+    """插件注册上下文。
+
+    通过 ``register(ctx)`` 回调传递给插件，提供注册工具和挂钩的方法。
+    PluginManager 在 ``register()`` 返回后从 ctx 收集注册结果。
+    """
+
+    def __init__(
+        self,
+        registry=None,
+        *,
+        dry_run: bool = False,
+    ):
+        self._registry = registry
+        self._dry_run = dry_run
+        self._tool_names: set[str] = set()
+        self._tools_info: list[dict] = []
+        self._hook_plugins: list[HookPlugin] = []
+
+    def register_tool(
+        self,
+        name: str,
+        schema: dict,
+        handler: Callable,
+        toolset: str = "plugin",
+    ) -> None:
+        """注册一个工具。
+
+        Args:
+            name: 工具名
+            schema: OpenAI function-calling 格式的 schema
+            handler: 调用处理函数，接收 ``(args: dict) -> str``
+            toolset: 所属工具集（默认 ``"plugin"``）
+        """
+        self._tool_names.add(name)
+        self._tools_info.append({
+            "name": name,
+            "schema": schema,
+            "definition_count": 1,
+        })
+        if self._registry is not None and not self._dry_run:
+            self._registry.register(
+                name=name,
+                toolset=toolset,
+                schema=schema,
+                handler=handler,
+            )
+
+    def register_hook(self, hook: HookPlugin) -> None:
+        """注册一个 HookPlugin。"""
+        self._hook_plugins.append(hook)

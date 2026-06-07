@@ -50,7 +50,7 @@ class TestLoad:
         pm.add_scan_path(FIXTURES)
         fpath = os.path.join(FIXTURES, "sample_tool_plugin.py")
         assert pm.load(fpath) is True
-        assert "greeter" in pm.tool_plugin_names
+        assert "sample_greet" in pm.plugin_tool_names
 
         # 工具注册到 registry
         assert "sample_greet" in clean_registry.tool_names
@@ -139,7 +139,7 @@ class TestHookDispatch:
     def test_multiple_hooks(self, tmp_path):
         """多个 HookPlugin 文件依次加载。"""
         code = '''\
-from plugins.protocol import HookPlugin
+from plugins.protocol import PluginContext
 
 class H:
     def on_register(self, r): pass
@@ -148,7 +148,8 @@ class H:
     def on_response(self, r): return None
     def on_session_end(self, m): pass
 
-__plugin__ = H()
+def register(ctx: PluginContext):
+    ctx.register_hook(H())
 '''
         f1 = tmp_path / "hook_a.py"
         f2 = tmp_path / "hook_b.py"
@@ -188,12 +189,34 @@ __plugin__ = H()
 
 class TestLoadAll:
     def test_add_default_paths(self, tmp_path, monkeypatch):
-        """默认路径包括 ~/.chips/plugins 和 ./plugins。"""
-        monkeypatch.chdir(str(tmp_path))
-        os.makedirs("plugins")
+        """默认路径：~/.chips/plugins 加入，./plugins（包目录）跳过。"""
+        fake_home = str(tmp_path / "home")
+        fake_plugin_dir = os.path.join(fake_home, ".chips", "plugins")
+        os.makedirs(fake_plugin_dir)
+        monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", fake_home))
         pm = PluginManager()
         pm.add_default_paths()
-        assert len(pm._scan_paths) >= 1  # 至少 ./plugins
+        # ~/.chips/plugins 是非包目录 → 加入
+        assert any("chips/plugins" in p for p in pm._scan_paths)
+        # ./plugins 是 Python 包（有 __init__.py）→ 跳过
+        assert not any(p.endswith("/plugins") and "chips" not in p for p in pm._scan_paths)
+
+    def test_skip_package_dir(self, tmp_path):
+        """包含 __init__.py 的目录不被当作插件扫描路径。"""
+        pkg_dir = tmp_path / "mypackage"
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("")
+        pm = PluginManager()
+        pm.add_scan_path(str(pkg_dir))
+        assert str(pkg_dir) not in pm._scan_paths
+
+    def test_accept_plain_dir(self, tmp_path):
+        """不含 __init__.py 的目录正常加入。"""
+        plain_dir = tmp_path / "myplugins"
+        plain_dir.mkdir()
+        pm = PluginManager()
+        pm.add_scan_path(str(plain_dir))
+        assert str(plain_dir) in pm._scan_paths
 
     def test_load_no_paths(self):
         pm = PluginManager()
@@ -204,5 +227,5 @@ class TestLoadAll:
         pm.add_scan_path(FIXTURES)
         pm.load_all()
         assert pm.loaded_count >= 2
-        assert len(pm.tool_plugin_names) >= 1
+        assert len(pm.plugin_tool_names) >= 1
         assert pm.hook_count >= 1

@@ -1,5 +1,5 @@
 """测试用 HookPlugin 夹具 — 记录所有钩子调用"""
-from plugins.protocol import HookPlugin
+from plugins.protocol import HookPlugin, PluginContext
 
 
 class RecordingHook:
@@ -27,4 +27,5 @@ class RecordingHook:
         self.calls.append(("on_session_end", (), {"messages": messages}))
 
 
-__plugin__ = RecordingHook()
+def register(ctx: PluginContext):
+    ctx.register_hook(RecordingHook())

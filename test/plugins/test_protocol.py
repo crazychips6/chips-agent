@@ -1,45 +1,5 @@
 """Plugin 协议测试"""
-from plugins.protocol import HookPlugin, ToolPlugin
-
-
-class TestToolPluginProtocol:
-    """验证 ToolPlugin 协议的结构兼容性。"""
-
-    def test_duck_type_conformance(self):
-        """鸭式类型满足 ToolPlugin 协议。"""
-
-        class MyPlugin:
-            name = "test"
-            description = "test"
-
-            def tool_definitions(self):
-                return []
-
-            def execute(self, tool_name, args):
-                return ""
-
-        assert isinstance(MyPlugin(), ToolPlugin)
-
-    def test_minimal_plugin(self):
-        """只实现必需属性即可通过检查。"""
-
-        class Minimal:
-            name = "minimal"
-            description = ""
-            def tool_definitions(self): return []
-            def execute(self, tool_name, args): return ""
-
-        assert isinstance(Minimal(), ToolPlugin)
-
-    def test_missing_name_fails(self):
-        """缺少 name 属性不通过。"""
-
-        class NoName:
-            description = ""
-            def tool_definitions(self): return []
-            def execute(self, tool_name, args): return ""
-
-        assert not isinstance(NoName(), ToolPlugin)
+from plugins.protocol import HookPlugin
 
 
 class TestHookPluginProtocol:
@@ -65,20 +25,21 @@ class TestHookPluginProtocol:
 
         assert not isinstance(Partial(), HookPlugin)
 
-    def test_on_register_optional(self):
-        """on_register 在 ToolPlugin 中没有要求。"""
-        from plugins.manager import PluginManager
+    def test_plugin_context_dry_run(self):
+        """PluginContext dry_run 模式不实际注册到 registry。"""
+        from plugins.protocol import PluginContext
         from tool.registry import ToolRegistry
 
         r = ToolRegistry()
-        pm = PluginManager(registry=r)
+        ctx = PluginContext(registry=r, dry_run=True)
+        ctx.register_tool(
+            name="dry_tool",
+            schema={"type": "function", "function": {"name": "dry_tool"}},
+            handler=lambda args: "result",
+        )
 
-        class PluginWithoutRegister:
-            name = "no_register"
-            description = ""
-            def tool_definitions(self): return []
-            def execute(self, tool_name, args): return ""
-
-        # 不应报错
-        pm._register_tool_plugin(PluginWithoutRegister())
-        assert "no_register" in pm.tool_plugin_names
+        # dry_run 模式下 registry 中没有工具
+        assert "dry_tool" not in r.tool_names
+        # 但 ctx 记录了信息
+        assert "dry_tool" in ctx._tool_names
+        assert len(ctx._tools_info) == 1

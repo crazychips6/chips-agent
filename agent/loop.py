@@ -267,6 +267,8 @@ class AIAgent:
                         # 插件钩子：工具调用前
                         if self.plugin_manager:
                             args = self.plugin_manager.dispatch_tool_call_pre(name, args)
+
+                        # 工具执行判断， memory虽然是register发现，但是执行时被截断，只有tool被调用dispatch
                         if self.memory_manager.has_tool(name):
                             t0 = time.time()
                             tool_result = self.memory_manager.handle_tool_call(name, args)
