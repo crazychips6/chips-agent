@@ -62,3 +62,9 @@ class ConfigStore:
         data = self._read()
         pricing = data.get("models", {}).get("pricing")
         return pricing if isinstance(pricing, dict) else None
+
+    def read_mcp_servers(self) -> dict[str, dict]:
+        """读取 ~/.chips/config.yaml 中的 mcp_servers 配置。"""
+        data = self._read()
+        servers = data.get("mcp_servers", {})
+        return servers if isinstance(servers, dict) else {}

@@ -331,7 +331,9 @@ class AIAgent:
                 self.plugin_manager.dispatch_session_end(self.messages)
 
     def shutdown(self):
-        """释放资源：关闭所有记忆提供者。"""
+        """释放资源：关闭 MCP 连接和所有记忆提供者。"""
+        if hasattr(self, "mcp_manager") and self.mcp_manager:
+            self.mcp_manager.stop_all()
         self.memory_manager.shutdown_all()
 
     def _save_pending(self):

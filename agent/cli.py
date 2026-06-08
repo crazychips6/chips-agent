@@ -14,6 +14,7 @@ from gateway.stats import UsageRecorder
 from memory.manager import MemoryManager
 from memory.providers.builtin import BuiltinMemoryProvider
 from plugins import PluginManager
+from plugins.mcp import MCPManager
 from session.db import SessionDB
 from tool.registry import registry
 from tool.toolsets import resolve_toolset
@@ -78,6 +79,8 @@ def _build_parser() -> argparse.ArgumentParser:
     session_search.add_argument("query", help="搜索关键词")
     session_delete = session_sub.add_parser("delete", help="删除会话")
     session_delete.add_argument("session_id", help="会话 ID")
+    session_stats = session_sub.add_parser("stats", help="显示会话用量统计")
+    session_stats.add_argument("session_id", help="会话 ID")
 
     return parser
 
@@ -153,6 +156,16 @@ def main():
     # 插件注册的工具需要额外加入 agent 可用工具列表
     agent.tool_names |= plugin_mgr.plugin_tool_names
 
+    # ── MCP 服务器初始化（从 config.yaml 读取配置） ──
+    mcp_mgr = MCPManager(registry=registry)
+    mcp_servers_config = ConfigStore().read_mcp_servers()
+    mcp_loaded = []
+    if mcp_servers_config:
+        mcp_loaded = mcp_mgr.load_servers(mcp_servers_config)
+        # MCP 注册的工具也加入 agent 可用工具列表
+        agent.tool_names |= set(mcp_mgr.get_all_tool_names())
+    agent.mcp_manager = mcp_mgr
+
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env
     if args.env == "docker":
@@ -216,7 +229,8 @@ def main():
         mem_status = "+".join(provider_names)
     print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
     compress_status = "off" if args.no_compress else "on"
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}")
+    mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}")
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend

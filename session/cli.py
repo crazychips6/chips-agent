@@ -54,6 +54,36 @@ def handle_session(args):
             preview = r["content"][:100].replace("\n", " ") if r["content"] else "(空)"
             print(f"  [{ts}] {r['session_id'][:8]}…  [{role}] {preview}")
 
+    elif args.session_action == "stats":
+        sess = db.get_session(args.session_id)
+        if not sess:
+            print(f"会话不存在: {args.session_id}")
+            sys.exit(1)
+        stats = db.get_session_stats(args.session_id)
+        created = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(sess["created_at"]))
+        print(f"会话: {sess['id']}")
+        print(f"创建: {created}")
+        print(f"LLM 调用: {stats['call_count']} 次")
+        print(f"Tokens:   {stats['total_prompt']:,} 输入 + {stats['total_completion']:,} 输出 = {stats['total_prompt'] + stats['total_completion']:,}")
+        print(f"费用:     ${stats['total_cost']:.6f}")
+
+        # 按模型统计
+        rows = db.get_session_usage(args.session_id)
+        if rows:
+            by_model: dict[str, dict] = {}
+            for r in rows:
+                m = r["model"]
+                if m not in by_model:
+                    by_model[m] = {"calls": 0, "prompt": 0, "completion": 0, "latency": []}
+                by_model[m]["calls"] += 1
+                by_model[m]["prompt"] += r["prompt_tokens"]
+                by_model[m]["completion"] += r["completion_tokens"]
+                by_model[m]["latency"].append(r["latency_ms"])
+            print("\n按模型:")
+            for m, d in by_model.items():
+                avg_lat = sum(d["latency"]) // len(d["latency"])
+                print(f"  {m}: {d['calls']} 次, {d['prompt'] + d['completion']:,} tokens, {avg_lat}ms 平均延迟")
+
     elif args.session_action == "delete":
         sess = db.get_session(args.session_id)
         if not sess:
