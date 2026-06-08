@@ -9,7 +9,7 @@ Phase 10 完成后 chips 已具备"日常可用"的基础（REPL、Session、Con
 2. **向量记忆** — 全量塞 prompt 臃肿，无法语义检索
 3. **Gateway/多模型** — 单一 base_url，无 fallback、无统计
 4. **插件系统** — 加工具必须改源码
-5. **上下文管理** — 粗暴裁剪，无语义判断
+5. **上下文管理** — ContextEngine 抽象 + LLM 摘要压缩 ✅
 6. **可观测性** — 无 token/费用/耗时追踪
 
 Phase 12 的目标是**补齐这 6 项，缩小与 Hermes 在 AI 能力上的差距**。
@@ -169,59 +169,19 @@ class HookPlugin(Protocol):
 | `chips plugin remove <name>` | 卸载插件 |
 | `chips plugin info <name>` | 查看插件详情 |
 
-### D4 — 迁移现有工具
+## E — 上下文管理 (ContextEngine 抽象 + 摘要压缩) ✅
 
-| 工具 | 当前 | 迁移后 |
-|------|------|--------|
-| `file_*` | `tool/builtins/file.py: register()` | 注册为内置 ToolPlugin |
-| `web_*` | `tool/builtins/web.py: register()` | 注册为内置 ToolPlugin |
-| `terminal` | `tool/builtins/terminal.py` | 注册为内置 ToolPlugin |
-| `memory` | `tool/builtins/memory.py` | 注册为内置 ToolPlugin |
+实现：
 
-**参考**: Hermes `hermes_core/plugins/` 全目录 + `hermes_cli/plugins_cmd.py`
-
----
-
-## E — 上下文管理 (语义级修剪)
-
-从"FIFO + 截断"升级为"内容价值驱动的裁剪"。
-
-### E1 — 轨迹压缩器
-
-| 模块 | 现状 | 目标 |
-|------|------|------|
-| `agent/loop.py:_maybe_trim_context` | FIFO 删最早，可能砍 tool_call chain | 保护首尾 + 压缩中间 tool 结果为摘要，不丢 assistant/tool 配对 |
-| `agent/trajectory_compressor.py` **(新)** | 无 | 配置 token 预算 → 超出时用 LLM 对历史分段摘要 |
-
-### E2 — 语义裁剪
-
-| 功能 | 说明 |
+| 模块 | 用途 |
 |------|------|
-| 轮次价值评估 | 用 LLM 判断每轮对话的价值（high/med/low） |
-| 低价值轮次丢弃 | token 超预算时优先丢弃 low 价值轮次 |
-| 高价值轮次摘要 | 对 high 价值但太长的轮次做摘要保留 |
+| `agent/context_engine.py` | ContextEngine ABC + NullContextEngine（永不压缩） |
+| `agent/context_compressor.py` | 默认引擎：tool 裁剪 + 边界保护 + LLM 摘要中间轮次 |
+| `agent/loop.py` | 集成：smart compression 先跑，`_maybe_trim_context` 兜底 |
 
-### E3 — 预算管理
+CLI：默认启用（`--no-compress` 关闭）。
 
-| 模块 | 现状 | 目标 |
-|------|------|------|
-| `agent/token_budget.py` **(新)** | 无 | 可配置的 token 预算：`max_context_tokens`（默认 32K） |
-| `agent/token_budget.py` | 无 | 不同模型不同预算（gpt-4 128K vs deepseek 64K） |
-
-### E4 — 集成路径
-
-```
-_build_messages()
-  → token_budget.check(total_tokens)
-  → if 超出:
-      trajectory_compressor.compress(history, budget)
-       → 轮次价值评估
-       → 低价值丢弃
-       → 高价值摘要
-  → return compressed messages
-```
-
-**参考**: Hermes `hermes_core/agent/trajectory_compressor.py` + token_budget 机制
+参考: Hermes `ContextEngine` + `ContextCompressor` 设计。**注意**：Hermes 约有 1400 行生产级实现（含 iterative update / focus topic / anti-thrashing / aux model fallback / 更细粒度 tool summarizer），当前实现为简化版 v1，覆盖核心链路。
 
 ---
 
@@ -296,7 +256,7 @@ F (可观测性) ──── 依赖 C3（用量统计），但 F1+F2 可独立�
 7. **A3+A4**（多模态工具 + 存储）
 8. **B3**（记忆管线集成）
 9. **C3+C4**（用量统计 + CLI）
-10. **D3+D4**（插件 CLI + 工具迁移）
+10. **D3**（插件 CLI）
 
 ## 交付标准
 

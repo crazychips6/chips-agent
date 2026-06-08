@@ -20,6 +20,7 @@ logger = logging.getLogger("chips.agent.loop")
 
 from agent.message import ImageBlock, TextBlock, image_file_to_data_uri, parse_user_content, to_openai_messages
 from agent.prompt import PromptBuilder
+from agent.context_engine import ContextEngine
 from gateway.protocol import ModelGateway
 from gateway.types import ChatResult
 from memory.manager import MemoryManager
@@ -65,6 +66,8 @@ class AIAgent:
         self.memory_manager = MemoryManager()
         # 插件管理器，由 cli.py 在启动时初始化注入
         self.plugin_manager: PluginManager | None = None
+        # 上下文压缩引擎，由 cli.py 在启动时注入
+        self.context_engine: ContextEngine | None = None
         # 上下文文件列表，由 cli.py 在启动时搜索注入
         self.context_files: list[tuple[str, str, str]] = []
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
@@ -193,6 +196,10 @@ class AIAgent:
         # ReAct 循环
         try:
             for iteration in range(max_iterations):
+                # 智能压缩（摘要保留信息，有 context engine 时优先）
+                if self.context_engine and self.context_engine.should_compress():
+                    self.messages = self.context_engine.compress(self.messages)
+                # 安全网（超 100K 字符时的硬裁剪）
                 self._maybe_trim_context()
 
                 api_messages = to_openai_messages(
@@ -242,6 +249,10 @@ class AIAgent:
                     rounds.append({"request": {"model": self.model, "messages": api_messages, "max_tokens": 4096, "tools": tools if tools else None}, "response": {"content": result.content, "reasoning_content": result.reasoning_content, "tool_calls": result.tool_calls}})
                     with open(_DEBUG_LOG, "w") as f:
                         json.dump(rounds, f, ensure_ascii=False, indent=2)
+
+                # 通知上下文引擎用量（用于判断是否需要压缩）
+                if self.context_engine and result.usage:
+                    self.context_engine.update_from_response(result.usage)
 
                 if result.tool_calls:
                     self.messages.append(self._build_assistant_msg(result))

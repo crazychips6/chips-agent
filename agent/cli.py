@@ -43,6 +43,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="执行环境: local（本地）或 docker（容器沙盒）")
     parser.add_argument("--docker-image", default="alpine:latest",
                         help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
+    parser.add_argument("--no-compress", action="store_true",
+                        help="禁用上下文压缩")
 
     # 子命令：chips config set/get/list
     subparsers = parser.add_subparsers(dest="command")
@@ -156,6 +158,20 @@ def main():
     if args.env == "docker":
         os.environ["CHIPS_DOCKER_IMAGE"] = args.docker_image
 
+    # ── 上下文压缩引擎 ──
+    if not args.no_compress:
+        from agent.context_compressor import ContextCompressor
+        compressor = ContextCompressor(
+            threshold_percent=0.50,
+            summarize_fn=lambda prompt: agent.gateway.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=agent.model,
+                max_tokens=4000,
+            ).content or "",
+        )
+        compressor.update_context_length(128_000)
+        agent.context_engine = compressor
+
     # ── Session 持久化 ──
     session_db = SessionDB(db_path=".chips/sessions.db")
     agent.session_db = session_db
@@ -199,7 +215,8 @@ def main():
         provider_names = [p.name for p in agent.memory_manager.providers]
         mem_status = "+".join(provider_names)
     print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}")
+    compress_status = "off" if args.no_compress else "on"
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}")
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
