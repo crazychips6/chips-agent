@@ -244,3 +244,7 @@ def run(host: str = "0.0.0.0", port: int = 8648):
     logging.basicConfig(level=logging.INFO)
     logger.info("chips web starting on http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    run()
