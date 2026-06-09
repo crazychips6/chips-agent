@@ -8,4 +8,5 @@ import tool.builtins.echo      # noqa: F401
 import tool.builtins.terminal  # noqa: F401
 import tool.builtins.file      # noqa: F401
 import tool.builtins.web       # noqa: F401
-import tool.builtins.screenshot  # noqa: F401
+import tool.builtins.screenshot   # noqa: F401
+import tool.builtins.skill_tools  # noqa: F401

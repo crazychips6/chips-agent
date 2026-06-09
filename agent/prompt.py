@@ -137,6 +137,7 @@ class PromptBuilder:
         *,
         memory_prompt: str = "",
         context_files: list[tuple[str, str, str]] | None = None,
+        skills_index: str = "",
     ) -> str:
         layers: list[tuple[str, str]] = []
 
@@ -148,6 +149,10 @@ class PromptBuilder:
 
         if memory_prompt:
             layers.append(("持久记忆", memory_prompt.strip()))
+
+        # Skills 索引块（可选，渐进式加载用）
+        if skills_index:
+            layers.append(("技能", skills_index))
 
         # Layer 6 — 项目上下文（可选）
         if context_files:

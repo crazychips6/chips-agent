@@ -41,6 +41,8 @@ class PluginManager:
         self._scan_paths: list[str] = []
         self._plugin_tool_names: set[str] = set()
         self._hook_plugins: list[HookPlugin] = []
+        # 插件技能：qualified_name → {name, description, path, plugin_name, qualified_name}
+        self._plugin_skills: dict[str, dict] = {}
         self._loaded_files: set[str] = set()
 
     # ── 路径管理 ──
@@ -113,6 +115,12 @@ class PluginManager:
 
             self._plugin_tool_names.update(ctx._tool_names)
             self._hook_plugins.extend(ctx._hook_plugins)
+            for skill_info in ctx._skills:
+                qualified = f"{module_name}:{skill_info['name']}"
+                if qualified not in self._plugin_skills:
+                    skill_info["qualified_name"] = qualified
+                    skill_info["plugin_name"] = module_name
+                    self._plugin_skills[qualified] = skill_info
             self._loaded_files.add(filepath)
 
             logger.info(
@@ -218,7 +226,25 @@ class PluginManager:
         return set(self._plugin_tool_names)
 
     @property
+    def plugin_skills(self) -> list:
+        """已注册的插件技能列表。"""
+        return list(self._plugin_skills.values())
+
+    def find_plugin_skill(self, qualified_name: str) -> dict | None:
+        """按 qualified name（``plugin:name``）查找插件技能。"""
+        return self._plugin_skills.get(qualified_name)
+
+    def list_plugin_skills(self, plugin_name: str | None = None) -> list[dict]:
+        """列出插件技能。可指定插件名过滤。"""
+        if plugin_name:
+            prefix = f"{plugin_name}:"
+            return [v for k, v in self._plugin_skills.items() if k.startswith(prefix)]
+        return list(self._plugin_skills.values())
+
+    @property
     def hook_count(self) -> int:
+        """已加载 HookPlugin 的数量。"""
+        return len(self._hook_plugins)
         """已加载 HookPlugin 的数量。"""
         return len(self._hook_plugins)
 

@@ -222,6 +222,16 @@ def main():
             print(f"\n{stats}")
         return
 
+    # ── 技能系统（REPL 模式） ──
+    from agent.skill import SkillManager
+    from tool.builtins.skill_tools import wire_skill_manager, wire_plugin_manager
+
+    skill_mgr = SkillManager()
+    skill_scan_count = skill_mgr.scan()
+    agent.skills_index = skill_mgr.get_skills_index_prompt()
+    wire_skill_manager(skill_mgr)
+    wire_plugin_manager(plugin_mgr)
+
     ctx_count = len(agent.context_files)
     mem_status = "off"
     if agent.memory_manager.providers:
@@ -230,7 +240,8 @@ def main():
     print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
     compress_status = "off" if args.no_compress else "on"
     mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}")
+    skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
+    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}  |  技能: {skill_status}")
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend

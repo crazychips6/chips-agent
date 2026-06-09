@@ -70,6 +70,8 @@ class AIAgent:
         self.context_engine: ContextEngine | None = None
         # 上下文文件列表，由 cli.py 在启动时搜索注入
         self.context_files: list[tuple[str, str, str]] = []
+        # <available_skills> 索引，由 cli.py 在启动时注入
+        self.skills_index: str = ""
         # 当前轮次的对话消息历史，tool_calls 结果也会追加进来
         self.messages: list[dict] = []
         # session 持久化，由 cli.py wiring 注入
@@ -173,6 +175,7 @@ class AIAgent:
         system = self.prompt_builder.build(
             memory_prompt=mem_prompt,
             context_files=self.context_files,
+            skills_index=self.skills_index,
         )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 

@@ -5,7 +5,8 @@ resolve_toolset() 递归展开，返回扁平的工具名集合。"""
 
 TOOLSETS: dict[str, set[str]] = {
     "core": {"echo", "terminal", "file_read", "file_write", "file_search",
-             "web_fetch", "web_search", "screenshot"},
+             "web_fetch", "web_search", "screenshot",
+             "skills_list", "skill_view", "skill_manage"},
     "all": {"core"},
 }
 

@@ -81,6 +81,7 @@ def _inspect(filepath: str) -> dict | None:
             "filepath": os.path.abspath(filepath),
             "tools": [],
             "hooks": False,
+            "skills": [],
             "errors": [],
         }
 
@@ -96,6 +97,13 @@ def _inspect(filepath: str) -> dict | None:
 
         if ctx._hook_plugins:
             info["hooks"] = True
+
+        for s in ctx._skills:
+            info["skills"].append({
+                "name": s["name"],
+                "description": s["description"],
+                "path": s.get("path"),
+            })
 
         return info
     except Exception as e:
@@ -131,6 +139,8 @@ def _list_plugins():
             type_tags.append("tool")
         if info and info.get("hooks"):
             type_tags.append("hook")
+        if info and info.get("skills"):
+            type_tags.append("skill")
         if not type_tags:
             type_tags.append("?" if info and not info.get("errors") else "err")
         tag = "/".join(type_tags)
@@ -182,6 +192,13 @@ def _show_plugin_info(name: str):
 
     if info["hooks"]:
         print(f"挂钩点: 是")
+
+    if info["skills"]:
+        print(f"技能 ({len(info['skills'])} 个):")
+        for s in info["skills"]:
+            print(f"  {s['name']:<15} {s['description']}")
+            if s.get("path"):
+                print(f"  {'':15} SKILL.md: {s['path']}")
 
 
 # ── install ──

@@ -53,6 +53,7 @@ class PluginContext:
         self._tool_names: set[str] = set()
         self._tools_info: list[dict] = []
         self._hook_plugins: list[HookPlugin] = []
+        self._skills: list = []
 
     def register_tool(
         self,
@@ -86,3 +87,26 @@ class PluginContext:
     def register_hook(self, hook: HookPlugin) -> None:
         """注册一个 HookPlugin。"""
         self._hook_plugins.append(hook)
+
+    def register_skill(
+        self,
+        name: str,
+        description: str,
+        path: str | None = None,
+    ) -> None:
+        """注册一个技能（指向 SKILL.md 文件）。
+
+        技能是 ``SKILL.md`` 文件（YAML frontmatter + markdown 正文）。
+        插件可以注册自己打包的 SKILL.md，系统会自动将其加入技能索引。
+
+        Args:
+            name: 技能名
+            description: 技能描述
+            path: SKILL.md 文件路径（可选）。如果提供，系统会复制到技能目录；
+                  如果不提供，视为声明式注册（由外部 SKILL.md 覆盖）。
+        """
+        self._skills.append({
+            "name": name,
+            "description": description,
+            "path": path,
+        })
