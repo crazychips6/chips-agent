@@ -168,6 +168,11 @@ def get_agent():
         from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
         wire_toolset_agent(agent)
 
+        # ── TodoStore ──
+        from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
+        agent.todo_store = TodoStore()
+        wire_todo_store(agent.todo_store)
+
         # Session
         session_db = SessionDB(db_path=".chips/sessions.db")
         agent.session_db = session_db

@@ -29,6 +29,7 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "web":      {"description": "网页搜索与内容抓取"},
     "vision":   {"description": "屏幕截图"},
     "skills":   {"description": "技能系统管理"},
+    "todo":     {"description": "任务规划与进度跟踪"},
     "all": {
         "description": "全部可用工具",
         "includes": ["core"],

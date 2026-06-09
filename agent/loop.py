@@ -84,6 +84,8 @@ class AIAgent:
         self._saved_count: int = 0
         # 上下文压缩：消息总字符超限时裁剪历史
         self.max_context_chars: int = 100_000
+        # 会话内任务列表，由 cli.py 注入
+        self.todo_store: Any = None
 
     # ── 消息构建 ──
 
