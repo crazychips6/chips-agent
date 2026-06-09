@@ -82,6 +82,11 @@ def _build_parser() -> argparse.ArgumentParser:
     session_stats = session_sub.add_parser("stats", help="显示会话用量统计")
     session_stats.add_argument("session_id", help="会话 ID")
 
+    # 子命令：chips web
+    web_cmd = subparsers.add_parser("web", help="启动 Web 聊天界面")
+    web_cmd.add_argument("--host", default="0.0.0.0", help="监听地址")
+    web_cmd.add_argument("--port", type=int, default=8648, help="监听端口")
+
     return parser
 
 
@@ -106,6 +111,10 @@ def main():
     args = parser.parse_args()
 
     # ── 子命令处理 ──
+    if args.command == "web":
+        from web.server import run as run_web
+        run_web(host=args.host, port=args.port)
+        return
     if args.command == "config":
         from config.cli import handle_config
         handle_config(args)

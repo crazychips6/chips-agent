@@ -1,0 +1,16 @@
+services:
+  chips:
+    build: .
+    ports:
+      - "8648:8648"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - CHIPS_MODEL=${CHIPS_MODEL:-deepseek-chat}
+      - CHIPS_BASE_URL=${CHIPS_BASE_URL:-https://api.deepseek.com}
+      - CHIPS_WEB_USER=${CHIPS_WEB_USER:-admin}
+      - CHIPS_WEB_PASS=${CHIPS_WEB_PASS:-admin}
+      - CHIPS_WEB_SECRET=${CHIPS_WEB_SECRET:-change-me-in-production}
+    volumes:
+      - ./.memory:/app/.memory
+      - ./.chips:/app/.chips
+      - ./skills:/app/skills

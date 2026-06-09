@@ -166,7 +166,7 @@ class AIAgent:
 
     # ── 主循环 ──
 
-    def run_conversation(self, user_message: str, max_iterations: int = 20) -> str:
+    def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None) -> str:
         # system prompt 每次重新构建
         mem_prompt = self.memory_manager.build_system_prompt()
         prefetch = self.memory_manager.prefetch_all(user_message)
@@ -234,10 +234,11 @@ class AIAgent:
 
                 # LLM 调用（通过 gateway，内部处理 retry/streaming）
                 if self.stream:
+                    _on_chunk = chunk_callback or (lambda c: print(c, end="", flush=True))
                     result = self.gateway.chat_stream(
                         messages=api_messages, model=self.model,
                         max_tokens=4096, tools=tools if tools else None,
-                        on_chunk=lambda c: print(c, end="", flush=True),
+                        on_chunk=_on_chunk,
                     )
                     # 纯文本流式输出结束后换行
                     if not result.tool_calls:

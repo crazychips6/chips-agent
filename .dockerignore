@@ -1,0 +1,10 @@
+.venv
+.git
+__pycache__
+*.pyc
+.memory
+.chips
+log
+docs
+test
+.env
