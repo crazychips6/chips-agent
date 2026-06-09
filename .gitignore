@@ -18,3 +18,4 @@ log/llm_*.md
 
 # coding 日志（人类阅读，不被 Claude 主动读取）
 log/coding_log/
+docs/learning/
