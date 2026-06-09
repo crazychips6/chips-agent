@@ -103,6 +103,11 @@ def _fetch_handler(args) -> str:
     if not url:
         return "错误：URL 不能为空"
 
+    # 拒绝非 http/https 协议（提前返回，不发起网络请求）
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme and parsed.scheme not in ("http", "https"):
+        return f"错误：不支持的协议 {parsed.scheme}，仅支持 http/https"
+
     # 补全 scheme
     if not url.startswith(("http://", "https://")):
         url = "https://" + url

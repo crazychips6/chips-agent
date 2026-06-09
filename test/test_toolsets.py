@@ -52,32 +52,16 @@ class TestResolveToolset:
         """确保内置工具已注册到全局 registry。"""
         import tool.builtins  # noqa: F401
 
-    def test_core_contains_echo(self):
+    def test_core_resolves_all_tools(self):
+        """core 展开后包含所有内置工具。"""
         result = resolve_toolset("core")
-        assert "echo" in result
-
-    def test_core_includes_terminal_tools(self):
-        result = resolve_toolset("core")
-        assert "terminal" in result
-
-    def test_core_includes_file_tools(self):
-        result = resolve_toolset("core")
-        assert "file_read" in result
-        assert "file_write" in result
-        assert "file_search" in result
-
-    def test_core_includes_web_tools(self):
-        result = resolve_toolset("core")
-        assert "web_fetch" in result
-        assert "web_search" in result
-
-    def test_core_includes_vision(self):
-        result = resolve_toolset("core")
-        assert "screenshot" in result
-
-    def test_core_includes_skills(self):
-        result = resolve_toolset("core")
-        assert "skills_list" in result
+        expected = {"echo", "terminal", "toolset",
+                     "file_read", "file_write", "file_search",
+                     "web_fetch", "web_search",
+                     "screenshot",
+                     "skills_list", "skill_view", "skill_manage"}
+        for tool in expected:
+            assert tool in result, f"core 缺少 {tool}"
 
     def test_all(self):
         """all 是 meta 工具集，递归展开所有子集。"""

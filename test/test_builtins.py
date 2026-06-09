@@ -14,26 +14,12 @@ class TestEchoTool:
     """通过 registry 调用 echo 工具。"""
 
     def test_echo_basic(self):
-        result = global_registry.dispatch("echo", {"text": "hello"})
-        assert result == "hello"
+        assert global_registry.dispatch("echo", {"text": "hello"}) == "hello"
+        assert global_registry.dispatch("echo", {"text": "你好 🎉"}) == "你好 🎉"
 
     def test_echo_empty(self):
-        result = global_registry.dispatch("echo", {"text": ""})
-        assert result == ""
-
-    def test_echo_missing_key(self):
-        result = global_registry.dispatch("echo", {})
-        assert result == ""
-
-    def test_echo_unicode(self):
-        result = global_registry.dispatch("echo", {"text": "你好世界 🎉"})
-        assert result == "你好世界 🎉"
-
-    def test_echo_registered(self):
-        """echo 注册在 core 工具集。"""
-        entries = global_registry._entries
-        assert "echo" in entries
-        assert entries["echo"].toolset == "core"
+        assert global_registry.dispatch("echo", {"text": ""}) == ""
+        assert global_registry.dispatch("echo", {}) == ""
 
 
 class TestFileTool:
@@ -77,12 +63,6 @@ class TestFileTool:
     def test_file_write_sensitive_git(self):
         result = global_registry.dispatch("file_write", {"path": ".git/HEAD", "content": "hack"})
         assert "拒绝" in result
-
-    def test_file_registered(self):
-        entries = global_registry._entries
-        assert "file_read" in entries
-        assert "file_write" in entries
-        assert entries["file_read"].toolset in ("file", "core")
 
     def test_symlink_to_env_is_blocked(self, tmp_path):
         """符号链接指向 .env 应被拦截。"""
@@ -267,10 +247,6 @@ class TestFileSearch:
         })
         assert "未找到" in result
 
-    def test_search_registered(self):
-        entries = global_registry._entries
-        assert "file_search" in entries
-        assert entries["file_search"].toolset in ("file", "core")
 
 
 class TestWebFetch:
@@ -278,16 +254,5 @@ class TestWebFetch:
 
     def test_invalid_scheme(self):
         result = global_registry.dispatch("web_fetch", {"url": "ftp://example.com"})
-        assert "URL" in result or "错误" in result
+        assert "不支持的协议 ftp" in result
 
-    def test_registered(self):
-        entries = global_registry._entries
-        assert "web_fetch" in entries
-
-
-class TestWebSearch:
-    """web_search 工具测试。"""
-
-    def test_registered(self):
-        entries = global_registry._entries
-        assert "web_search" in entries

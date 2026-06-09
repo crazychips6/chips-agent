@@ -17,12 +17,17 @@ from tool.toolsets import resolve_toolset
 
 @pytest.fixture(autouse=True)
 def _auto_clean_registry():
-    """清理全局 registry 并注册 echo。"""
+    """保存 registry 快照，注入 echo，测试后恢复。"""
     from tool.registry import registry as r
-    r.deregister("echo")
+    saved = dict(r._entries)
+    r._entries.clear()
+    r._check_fn_cache.clear()
     r.register(name="echo", toolset="core", handler=lambda args: args.get("text", ""))
     yield r
-    r.deregister("echo")
+    r._entries.clear()
+    r._check_fn_cache.clear()
+    r._entries.update(saved)
+    r._generation += 1
 
 
 @pytest.fixture
@@ -113,16 +118,7 @@ class TestToolsetAndMemoryWiring:
     """验证 toolset 解析 + memory wiring 的组合逻辑。"""
 
     def test_tool_names_after_wiring(self):
-        """注入 core 后 tool_names 内容正确。"""
-        agent = AIAgent(model="test")
-        agent.registry = global_registry
-
-        # 模拟 cli.py 的 wiring 顺序
-        agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
-        assert agent.tool_names == {"echo"}
-
-    def test_tool_names_core_only(self):
-        """只加载 core 工具集。"""
+        """注入 core 后 tool_names 只包含 echo。"""
         agent = AIAgent(model="test")
         agent.registry = global_registry
         agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
