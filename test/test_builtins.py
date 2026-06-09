@@ -82,7 +82,7 @@ class TestFileTool:
         entries = global_registry._entries
         assert "file_read" in entries
         assert "file_write" in entries
-        assert entries["file_read"].toolset == "core"
+        assert entries["file_read"].toolset in ("file", "core")
 
     def test_symlink_to_env_is_blocked(self, tmp_path):
         """符号链接指向 .env 应被拦截。"""
@@ -270,7 +270,7 @@ class TestFileSearch:
     def test_search_registered(self):
         entries = global_registry._entries
         assert "file_search" in entries
-        assert entries["file_search"].toolset == "core"
+        assert entries["file_search"].toolset in ("file", "core")
 
 
 class TestWebFetch:

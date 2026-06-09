@@ -59,7 +59,7 @@ def handle_screenshot(args: dict) -> str:
 
 registry.register(
     name="screenshot",
-    toolset="core",
+    toolset="vision",
     schema={
         "type": "function",
         "function": {

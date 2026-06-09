@@ -128,6 +128,59 @@ class ToolRegistry:
         logger.info("tool=%s status=ok duration_ms=%d", name, elapsed)
         return result
 
+    # ── toolset 查询 ──
+
+    def get_tool_names_for_toolset(self, toolset: str) -> list[str]:
+        """返回指定 toolset 下的所有工具名。"""
+        with self._lock:
+            return sorted(
+                name for name, e in self._entries.items()
+                if e.toolset == toolset
+            )
+
+    def get_registered_toolset_names(self) -> list[str]:
+        """返回所有出现过的 toolset 名。"""
+        with self._lock:
+            names: set[str] = set()
+            for e in self._entries.values():
+                if e.toolset:
+                    names.add(e.toolset)
+            return sorted(names)
+
+    def get_toolset_for_tool(self, name: str) -> str | None:
+        """返回指定工具所属的 toolset 名。"""
+        with self._lock:
+            entry = self._entries.get(name)
+            return entry.toolset if entry else None
+
+    def check_toolset_availability(self, toolset: str) -> bool:
+        """检查一个 toolset 是否有可用工具（任一 check_fn 通过即可）。
+
+        没有 check_fn 的工具视为永远可用。
+        完全无工具返回 False。
+        """
+        now = time.time()
+        with self._lock:
+            entries = [
+                e for e in self._entries.values()
+                if e.toolset == toolset
+            ]
+        if not entries:
+            return False
+        for e in entries:
+            if not e.check_fn:
+                return True  # 有无 check_fn 的工具，直接可用
+            cached = self._check_fn_cache.get(e.name)
+            if cached and (now - cached[0]) < _CHECK_FN_TTL:
+                if cached[1]:
+                    return True
+            else:
+                ok = e.check_fn()
+                self._check_fn_cache[e.name] = (now, ok)
+                if ok:
+                    return True
+        return False
+
     @property
     def tool_names(self) -> set[str]:
         """返回当前所有已注册的工具名称。"""

@@ -212,7 +212,7 @@ def _register():
     for t in _SKILL_TOOLS:
         registry.register(
             name=t["name"],
-            toolset="skill",
+            toolset="skills",
             schema=t["schema"],
             handler=t["handler"],
         )

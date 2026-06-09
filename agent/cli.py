@@ -17,7 +17,7 @@ from plugins import PluginManager
 from plugins.mcp import MCPManager
 from session.db import SessionDB
 from tool.registry import registry
-from tool.toolsets import resolve_toolset
+from tool.toolsets import resolve_multiple_toolsets, get_toolset, is_toolset_available
 
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
@@ -144,7 +144,9 @@ def main():
     agent = AIAgent(model=args.model, debug_context=args.debug_context, verbose=args.verbose, stream=not args.no_stream, gateway=recorder)
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
-    agent.tool_names = resolve_toolset(args.toolset) & registry.tool_names
+    toolset_names = [n.strip() for n in args.toolset.split(",")]
+    agent.enabled_toolsets = list(toolset_names)
+    agent.tool_names = set(resolve_multiple_toolsets(toolset_names)) & registry.tool_names
 
     # 在 CWD 搜索上下文文件并注入 agent
     context_files = search_context_files()
@@ -162,8 +164,9 @@ def main():
         from agent.logger import get_logger
         get_logger().info("plugins_loaded count=%d", loaded)
     agent.plugin_manager = plugin_mgr
-    # 插件注册的工具需要额外加入 agent 可用工具列表
+    # 插件注册的工具需要额外加入 agent 可用工具列表（不受 toolset 开关影响）
     agent.tool_names |= plugin_mgr.plugin_tool_names
+    agent._extra_tool_names |= plugin_mgr.plugin_tool_names
 
     # ── MCP 服务器初始化（从 config.yaml 读取配置） ──
     mcp_mgr = MCPManager(registry=registry)
@@ -173,7 +176,12 @@ def main():
         mcp_loaded = mcp_mgr.load_servers(mcp_servers_config)
         # MCP 注册的工具也加入 agent 可用工具列表
         agent.tool_names |= set(mcp_mgr.get_all_tool_names())
+        agent._extra_tool_names |= set(mcp_mgr.get_all_tool_names())
     agent.mcp_manager = mcp_mgr
+
+    # ── toolset 工具接线（动态开关工具集） ──
+    from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
+    wire_toolset_agent(agent)
 
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env
@@ -250,7 +258,13 @@ def main():
     compress_status = "off" if args.no_compress else "on"
     mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
     skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
-    print(f"工具集: {args.toolset}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}  |  技能: {skill_status}")
+    avail_parts = []
+    for ts_name in toolset_names:
+        if get_toolset(ts_name):
+            ok = is_toolset_available(ts_name)
+            icon = "✓" if ok else "✗"
+            avail_parts.append(f"{ts_name}{icon}")
+    print(f"工具集: {' '.join(avail_parts)}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}  |  技能: {skill_status}")
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend

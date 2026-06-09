@@ -52,7 +52,7 @@ def _execute_handler(args) -> str:
 
 registry.register(
     name="terminal",
-    toolset="core",
+    toolset="terminal",
     schema={
         "type": "function",
         "function": {

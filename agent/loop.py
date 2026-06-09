@@ -63,6 +63,10 @@ class AIAgent:
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
+        # 启用的 toolset 名列表（动态开关用），由 cli.py 注入
+        self.enabled_toolsets: list[str] = []
+        # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
+        self._extra_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
         # 插件管理器，由 cli.py 在启动时初始化注入
         self.plugin_manager: PluginManager | None = None
@@ -172,10 +176,12 @@ class AIAgent:
         prefetch = self.memory_manager.prefetch_all(user_message)
         if prefetch:
             mem_prompt = (mem_prompt + "\n\n" + prefetch) if mem_prompt else prefetch
+        from tool.toolsets import build_availability_table
         system = self.prompt_builder.build(
             memory_prompt=mem_prompt,
             context_files=self.context_files,
             skills_index=self.skills_index,
+            toolset_availability=build_availability_table(),
         )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
@@ -214,6 +220,12 @@ class AIAgent:
                     "messages": api_messages,
                     "max_tokens": 4096,
                 }
+
+                # 从 enabled_toolsets 重新解析 tool_names（支持运行时动态开关）
+                if self.registry and self.enabled_toolsets:
+                    from tool.toolsets import resolve_multiple_toolsets
+                    base = resolve_multiple_toolsets(self.enabled_toolsets)
+                    self.tool_names = (set(base) | self._extra_tool_names) & self.registry.tool_names
 
                 if self.registry or self.memory_manager.providers:
                     tools = []

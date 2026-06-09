@@ -288,7 +288,7 @@ def _parse_ddg_results(html: str) -> list[tuple[str, str, str]]:
 
 registry.register(
     name="web_fetch",
-    toolset="core",
+    toolset="web",
     schema={
         "type": "function",
         "function": {
@@ -311,7 +311,7 @@ registry.register(
 
 registry.register(
     name="web_search",
-    toolset="core",
+    toolset="web",
     schema={
         "type": "function",
         "function": {

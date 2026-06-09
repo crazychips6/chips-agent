@@ -290,7 +290,7 @@ def _search_file(fp: Path, pattern: str, match_fn, results: list, max_results: i
 
 registry.register(
     name="file_read",
-    toolset="core",
+    toolset="file",
     schema={
         "type": "function",
         "function": {
@@ -321,7 +321,7 @@ registry.register(
 
 registry.register(
     name="file_write",
-    toolset="core",
+    toolset="file",
     schema={
         "type": "function",
         "function": {
@@ -361,7 +361,7 @@ registry.register(
 
 registry.register(
     name="file_search",
-    toolset="core",
+    toolset="file",
     schema={
         "type": "function",
         "function": {

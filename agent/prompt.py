@@ -138,6 +138,7 @@ class PromptBuilder:
         memory_prompt: str = "",
         context_files: list[tuple[str, str, str]] | None = None,
         skills_index: str = "",
+        toolset_availability: str = "",
     ) -> str:
         layers: list[tuple[str, str]] = []
 
@@ -153,6 +154,10 @@ class PromptBuilder:
         # Skills 索引块（可选，渐进式加载用）
         if skills_index:
             layers.append(("技能", skills_index))
+
+        # 工具集可用性表（可选）
+        if toolset_availability:
+            layers.append(("可用工具集", toolset_availability))
 
         # Layer 6 — 项目上下文（可选）
         if context_files:

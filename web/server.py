@@ -114,7 +114,7 @@ def get_agent():
         from plugins.mcp import MCPManager
         from session.db import SessionDB
         from tool.registry import registry
-        from tool.toolsets import resolve_toolset
+        from tool.toolsets import resolve_multiple_toolsets
         import tool.builtins  # noqa: F401
 
         load_dotenv()
@@ -136,7 +136,10 @@ def get_agent():
             gateway=recorder,
         )
         agent.registry = registry
-        agent.tool_names = resolve_toolset("core") & registry.tool_names
+        toolset_cfg = os.getenv("CHIPS_TOOLSET", "core")
+        ts_names = [n.strip() for n in toolset_cfg.split(",")]
+        agent.enabled_toolsets = list(ts_names)
+        agent.tool_names = set(resolve_multiple_toolsets(ts_names)) & registry.tool_names
 
         # 记忆
         memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")
@@ -150,6 +153,7 @@ def get_agent():
         plugin_mgr.load_all()
         agent.plugin_manager = plugin_mgr
         agent.tool_names |= plugin_mgr.plugin_tool_names
+        agent._extra_tool_names |= plugin_mgr.plugin_tool_names
 
         # MCP
         mcp_servers_config = ConfigStore().read_mcp_servers()
@@ -158,6 +162,11 @@ def get_agent():
             mcp_mgr.load_servers(mcp_servers_config)
             agent.mcp_manager = mcp_mgr
             agent.tool_names |= set(mcp_mgr.get_all_tool_names())
+            agent._extra_tool_names |= set(mcp_mgr.get_all_tool_names())
+
+        # ── toolset 工具接线 ──
+        from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
+        wire_toolset_agent(agent)
 
         # Session
         session_db = SessionDB(db_path=".chips/sessions.db")
@@ -177,6 +186,23 @@ def get_agent():
         _agent = agent
         logger.info("agent_initialized")
     return _agent
+
+
+# ── 生命周期 ──
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _agent
+    if _agent is not None:
+        logger.info("shutting down agent ...")
+        if mcp := getattr(_agent, "mcp_manager", None):
+            try:
+                mcp.stop_all()
+            except Exception:
+                pass
+        logger.info("agent shut down complete")
+        _agent = None
 
 
 # ── 路由 ──
@@ -241,7 +267,8 @@ if STATIC_DIR.is_dir():
 def run(host: str = "0.0.0.0", port: int = 8648):
     import uvicorn
 
-    logging.basicConfig(level=logging.INFO)
+    from agent.logger import setup_logging
+    setup_logging(console=True)
     logger.info("chips web starting on http://%s:%d", host, port)
     uvicorn.run(app, host=host, port=port)
 

@@ -11,16 +11,18 @@ from agent.loop import AIAgent
 from gateway.types import ChatResult
 from memory.manager import MemoryManager
 from memory.providers.builtin import BuiltinMemoryProvider
-from tool.registry import ToolRegistry
+from tool.registry import registry as global_registry
 from tool.toolsets import resolve_toolset
 
 
-@pytest.fixture
-def clean_registry():
-    """提供干净 registry，测试后清理注册的工具。"""
-    r = ToolRegistry()
+@pytest.fixture(autouse=True)
+def _auto_clean_registry():
+    """清理全局 registry 并注册 echo。"""
+    from tool.registry import registry as r
+    r.deregister("echo")
     r.register(name="echo", toolset="core", handler=lambda args: args.get("text", ""))
-    return r
+    yield r
+    r.deregister("echo")
 
 
 @pytest.fixture
@@ -34,13 +36,13 @@ def mock_gateway():
 class TestAgentWiring:
     """模拟 CLI 的 wiring 流程，验证 agent 状态和 prompt 结果。"""
 
-    def test_full_wiring(self, clean_registry, mock_gateway, tmp_path):
+    def test_full_wiring(self, mock_gateway, tmp_path):
         """完整链路：registry + tools + MemoryManager + context → 全部 prompt 层。"""
         agent = AIAgent(gateway=mock_gateway)
-        agent.registry = clean_registry
+        agent.registry = global_registry
 
         # 注入 toolset
-        agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
+        agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
 
         # 注入 MemoryManager + BuiltinMemoryProvider
         mem_dir = str(tmp_path / ".memory")
@@ -68,13 +70,13 @@ class TestAgentWiring:
         for layer in layers:
             assert f"# {layer}" in system, f"缺少层: {layer}"
 
-    def test_wiring_no_memory(self, clean_registry, mock_gateway):
+    def test_wiring_no_memory(self, mock_gateway):
         """--no-memory 场景：只有 core 工具集，无记忆层。"""
         agent = AIAgent(gateway=mock_gateway)
-        agent.registry = clean_registry
+        agent.registry = global_registry
 
         # 只注入 core，不注入 memory
-        agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
+        agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
         agent.context_files = []
 
         agent.run_conversation("hi")
@@ -89,11 +91,11 @@ class TestAgentWiring:
         assert "# 持久记忆" not in system
         assert "# 项目上下文" not in system
 
-    def test_context_files_flow_into_prompt(self, clean_registry, mock_gateway, tmp_path):
+    def test_context_files_flow_into_prompt(self, mock_gateway, tmp_path):
         """上下文文件内容正确注入到 prompt 的项目上下文层。"""
         agent = AIAgent(gateway=mock_gateway)
-        agent.registry = clean_registry
-        agent.tool_names = clean_registry.tool_names
+        agent.registry = global_registry
+        agent.tool_names = global_registry.tool_names
 
         ctx = tmp_path / "CONTEXT.md"
         ctx.write_text("测试项目的上下文数据")
@@ -110,18 +112,18 @@ class TestAgentWiring:
 class TestToolsetAndMemoryWiring:
     """验证 toolset 解析 + memory wiring 的组合逻辑。"""
 
-    def test_tool_names_after_wiring(self, clean_registry):
+    def test_tool_names_after_wiring(self):
         """注入 core 后 tool_names 内容正确。"""
         agent = AIAgent(model="test")
-        agent.registry = clean_registry
+        agent.registry = global_registry
 
         # 模拟 cli.py 的 wiring 顺序
-        agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
+        agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
         assert agent.tool_names == {"echo"}
 
-    def test_tool_names_core_only(self, clean_registry):
+    def test_tool_names_core_only(self):
         """只加载 core 工具集。"""
         agent = AIAgent(model="test")
-        agent.registry = clean_registry
-        agent.tool_names = resolve_toolset("core") & clean_registry.tool_names
+        agent.registry = global_registry
+        agent.tool_names = set(resolve_toolset("core")) & global_registry.tool_names
         assert agent.tool_names == {"echo"}
