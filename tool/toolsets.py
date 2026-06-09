@@ -30,6 +30,7 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "vision":   {"description": "屏幕截图"},
     "skills":   {"description": "技能系统管理"},
     "todo":     {"description": "任务规划与进度跟踪"},
+    "clarify":  {"description": "向用户追问澄清"},
     "all": {
         "description": "全部可用工具",
         "includes": ["core"],

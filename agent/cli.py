@@ -183,10 +183,9 @@ def main():
     from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
     wire_toolset_agent(agent)
 
-    # ── TodoStore ──
+    # ── TodoStore（模块级，供 todo 工具使用） ──
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
-    agent.todo_store = TodoStore()
-    wire_todo_store(agent.todo_store)
+    wire_todo_store(TodoStore())
 
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env
