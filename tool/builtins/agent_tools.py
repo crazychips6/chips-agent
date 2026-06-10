@@ -75,12 +75,14 @@ def resolve_agent_config(
         tool_names = entry.get("tools", None)
         max_iterations = min(entry.get("max_iterations", 10), 30)
         context = entry.get("system_prompt", "")
+        pool_size = entry.get("pool_size", None)
         agent_name = name
     else:
         model = args.get("model", parent.model)
         tool_names = args.get("tools", None)
         max_iterations = min(args.get("max_iterations", 10), 30)
         context = args.get("context", "")
+        pool_size = None
 
     return {
         "model": model,
@@ -88,6 +90,7 @@ def resolve_agent_config(
         "max_iterations": max_iterations,
         "context": context,
         "agent_name": agent_name,
+        "pool_size": pool_size,
     }
 
 
@@ -100,6 +103,7 @@ def build_sub_agent(
     max_iterations: int = 10,
     context: str = "",
     agent_name: str = "",
+    pool_size: int | None = None,  # noqa: ARG001 — used by orchestrate for pool control
     session_db=None,
     session_id: str = "",
 ) -> tuple[AIAgent, str, int]:

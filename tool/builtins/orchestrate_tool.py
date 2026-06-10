@@ -1,4 +1,4 @@
-"""orchestrate 工具 — 多 Agent 编排模式
+﻿"""orchestrate 工具 — 多 Agent 编排模式
 
 Phase 3: 三种编排模式：
 
@@ -7,6 +7,7 @@ Phase 3: 三种编排模式：
   3. debate — 多 Agent 独立回答同一问题，返回对比
 
 共享 agent_tools 的工厂函数 resolve_agent_config / build_sub_agent。
+Agent Pool 控制每个角色的并发上限。
 """
 
 from __future__ import annotations
@@ -16,8 +17,9 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from agent.pool import acquire as pool_acquire, release as pool_release
 from tool.registry import registry
-from tool.builtins.agent_tools import get_parent, get_registry, resolve_agent_config, build_sub_agent
+from tool.builtins.agent_tools import get_parent, resolve_agent_config, build_sub_agent
 
 logger = logging.getLogger("chips.tool.orchestrate")
 
@@ -191,15 +193,19 @@ def _run_single_step(
     except (RuntimeError, ValueError) as e:
         return {"step": tag, "agent": agent_name, "error": str(e)}
 
-    sub, final_task, max_iterations = build_sub_agent(
-        task=task_text,
-        parent=parent,
-        **config,
-        session_db=parent.session_db,
-        session_id=parent.session_id or "",
-    )
+    # Agent Pool — 角色级并发限流
+    pool_size = config.get("pool_size")
+    if pool_size:
+        pool_acquire(agent_name, pool_size=pool_size)
 
     try:
+        sub, final_task, max_iterations = build_sub_agent(
+            task=task_text,
+            parent=parent,
+            **config,
+            session_db=parent.session_db,
+            session_id=parent.session_id or "",
+        )
         output = sub.run_conversation(final_task, max_iterations=max_iterations)
         return {
             "step": tag,
@@ -213,6 +219,9 @@ def _run_single_step(
             "agent": agent_name,
             "error": str(e),
         }
+    finally:
+        if pool_size:
+            pool_release(agent_name)
 
 
 def _extract_text(result: dict) -> str:

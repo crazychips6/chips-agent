@@ -17,6 +17,8 @@ def reset_globals():
     import tool.builtins.agent_tools as at
     at._parent = None
     at._registry = None
+    from agent.pool import reset as reset_pool
+    reset_pool()
 
 
 @pytest.fixture
@@ -34,6 +36,7 @@ def mock_registry():
             "researcher": {
                 "model": "deepseek-chat", "tools": ["web"],
                 "max_iterations": 20, "system_prompt": "研究助手",
+                "pool_size": 3,
             },
             "coder": {
                 "model": "deepseek-chat", "tools": ["terminal", "file"],
