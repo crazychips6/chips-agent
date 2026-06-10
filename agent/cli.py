@@ -183,9 +183,14 @@ def main():
     from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
     wire_toolset_agent(agent)
 
-    # ── delegate_task 工具接线（子 Agent 委派） ──
-    from tool.builtins.agent_tools import wire_parent
+    # ── delegate_task 工具接线（子 Agent 委派 + AgentRegistry） ──
+    from tool.builtins.agent_tools import wire_parent, wire_registry
     wire_parent(agent)
+    from config.agent_config import AgentRegistry
+    agent_registry = AgentRegistry()
+    if agent_registry:
+        wire_registry(agent_registry)
+        get_logger().info("agent_registry loaded names=%s", agent_registry.names)
 
     # ── TodoStore（模块级，供 todo 工具使用） ──
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store

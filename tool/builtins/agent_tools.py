@@ -1,15 +1,22 @@
 """delegate_task 工具 — 多 Agent 任务委派
 
 Phase 1: Agent-as-Tool 模式。
+Phase 2: Agent Registry — agents.yaml 定义的角色 Agent。
+
 子 Agent 共享主 Agent 的 gateway + registry，独立 context、独立消息历史。
 
 使用：
+  # 内联参数（Phase 1）
   delegate_task({
       "task": "用 web_search 搜索 xxx 并整理报告",
-      "tools": ["web"],           # 工具集名列表
-      "model": "deepseek-chat",   # 可选，默认同主 Agent
-      "max_iterations": 10,       # 可选，默认 10
-      "context": "...",           # 可选，注入子 Agent system prompt
+      "tools": ["web"],
+      "model": "deepseek-chat",
+  })
+
+  # 注册表 Agent（Phase 2）
+  delegate_task({
+      "agent": "researcher",
+      "task": "搜索 xxx 的最新进展",
   })
 """
 
@@ -26,13 +33,20 @@ from tool.registry import registry
 
 logger = logging.getLogger("chips.tool.agent_tools")
 
-# 由 cli.py 在启动时通过 wire_parent() 注入
+# 由 cli.py 在启动时通过 wire_parent() / wire_registry() 注入
 _parent: AIAgent | None = None
+_registry: Any = None  # config.agent_config.AgentRegistry
 
 
 def wire_parent(agent: AIAgent) -> None:
     global _parent
     _parent = agent
+
+
+def wire_registry(reg: Any) -> None:
+    """注入 AgentRegistry。"""
+    global _registry
+    _registry = reg
 
 
 def _handle(args: dict[str, Any]) -> str:
@@ -44,10 +58,34 @@ def _handle(args: dict[str, Any]) -> str:
     if not task:
         return json.dumps({"error": "task 不能为空"})
 
-    model = args.get("model", parent.model)
-    tool_names = args.get("tools", None)
-    max_iterations = min(args.get("max_iterations", 10), 30)
-    context = args.get("context", "")
+    # ── 从 registry 或内联参数解析 ──
+    model: str = parent.model
+    tool_names: list[str] | None = None
+    max_iterations: int = 10
+    context: str = ""
+
+    agent_name = args.get("agent", "")
+    if agent_name:
+        # 从 AgentRegistry 查找定义
+        if _registry is None:
+            return json.dumps({"error": "AgentRegistry 未初始化，无法使用 agent 参数"})
+        entry = _registry.get(agent_name)
+        if entry is None:
+            available = ", ".join(_registry.names)
+            return json.dumps({
+                "error": f"未知 Agent: '{agent_name}'",
+                "available_agents": available,
+            })
+        model = entry.get("model", parent.model)
+        tool_names = entry.get("tools", None)
+        max_iterations = min(entry.get("max_iterations", 10), 30)
+        context = entry.get("system_prompt", "")
+    else:
+        # 内联参数
+        model = args.get("model", parent.model)
+        tool_names = args.get("tools", None)
+        max_iterations = min(args.get("max_iterations", 10), 30)
+        context = args.get("context", "")
 
     # 注入额外上下文到 task 前端
     if context:
@@ -72,7 +110,6 @@ def _handle(args: dict[str, Any]) -> str:
         sub.tool_names = set(resolved) & parent.registry.tool_names
         sub.enabled_toolsets = list(tool_names)
     else:
-        # 默认：继承主 Agent 的工具集
         sub.tool_names = parent.tool_names
         sub.enabled_toolsets = list(parent.enabled_toolsets)
 
@@ -89,13 +126,14 @@ def _handle(args: dict[str, Any]) -> str:
 
     # ── 执行子任务 ──
     try:
-        logger.info("sub_agent task=%r model=%s tools=%s iter=%d",
-                     task[:80], model, tool_names, max_iterations)
+        tag = agent_name or "(inline)"
+        logger.info("sub_agent[%s] task=%r model=%s tools=%s iter=%d",
+                     tag, task[:80], model, tool_names, max_iterations)
         result = sub.run_conversation(task, max_iterations=max_iterations)
-        logger.info("sub_agent done len=%d", len(result))
+        logger.info("sub_agent[%s] done len=%d", tag, len(result))
         return result
     except Exception as e:
-        logger.error("sub_agent failed: %s", e, exc_info=True)
+        logger.error("sub_agent[%s] failed: %s", tag, e, exc_info=True)
         return json.dumps({"error": f"子任务执行失败: {e}"})
 
 
@@ -107,6 +145,14 @@ DELEGATE_SCHEMA = {
         "name": "delegate_task",
         "description": (
             "将子任务委派给一个独立的子 Agent 执行，返回执行结果。\n\n"
+            "两种使用方式：\n\n"
+            "1. 注册表 Agent（推荐）：\n"
+            '   delegate_task({"agent": "researcher", "task": "搜索xxx"})\n'
+            "   通过 agent 参数引用 agents.yaml 中定义的角色 Agent，"
+            "自动使用预设的模型、工具集和系统提示。\n\n"
+            "2. 内联参数：\n"
+            '   delegate_task({"task": "...", "tools": ["web"], "model": "..."})\n'
+            "   手动指定所有参数。\n\n"
             "适用场景：\n"
             "- 需要大量搜索、阅读文档等耗时操作，不影响主 Agent 的对话状态\n"
             "- 需要使用特定的工具组合来完成专项任务\n"
@@ -117,6 +163,11 @@ DELEGATE_SCHEMA = {
         "parameters": {
             "type": "object",
             "properties": {
+                "agent": {
+                    "type": "string",
+                    "description": "agents.yaml 中定义的角色 Agent 名，如 'researcher', 'coder'。"
+                                   "使用后自动填充 tools/model/context 等参数。",
+                },
                 "task": {
                     "type": "string",
                     "description": "给子 Agent 的任务描述。尽量清晰完整，包含背景、目标、输出格式要求。",
@@ -139,7 +190,10 @@ DELEGATE_SCHEMA = {
                     "description": "额外上下文信息，注入到子 Agent 的 system prompt 中（可选）。",
                 },
             },
-            "required": ["task"],
+            "oneOf": [
+                {"required": ["agent", "task"]},
+                {"required": ["task"]},
+            ],
         },
     },
 }
