@@ -180,7 +180,8 @@ class TestAgentRegistry:
         result = json.loads(at._handle({"agent": "hacker", "task": "测试"}))
         assert "error" in result
         assert "hacker" in result["error"]
-        assert "researcher" in result["available_agents"]
+        assert "researcher" in result["error"]
+        assert "coder" in result["error"]
 
     def test_registry_not_wired(self, mock_gateway):
         """未 wire registry 时使用 agent 参数返回 error。"""
