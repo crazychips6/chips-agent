@@ -21,8 +21,8 @@ from typing import Any
 
 TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "core": {
-        "description": "核心工具集（terminal + file + web + vision + skills + system）",
-        "includes": ["terminal", "file", "web", "vision", "skills", "geo", "system"],
+        "description": "核心工具集（terminal + file + web + vision + skills + system + process）",
+        "includes": ["terminal", "file", "web", "vision", "skills", "geo", "system", "process"],
     },
     "terminal": {"description": "终端命令执行"},
     "file":     {"description": "文件读写与搜索"},
@@ -33,6 +33,7 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "clarify":  {"description": "向用户追问澄清"},
     "geo":      {"description": "基于 IP 的地理位置查询"},
     "system":   {"description": "系统信息查询（OS、CPU、内存、磁盘）"},
+    "process":  {"description": "进程管理（列出/查看/终止）"},
     "all": {
         "description": "全部可用工具",
         "includes": ["core"],
