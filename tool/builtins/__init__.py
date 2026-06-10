@@ -15,3 +15,4 @@ import tool.builtins.todo_tool  # noqa: F401
 import tool.builtins.clarify_tool  # noqa: F401
 import tool.builtins.geo_tool  # noqa: F401
 import tool.builtins.system_info  # noqa: F401
+import tool.builtins.calendar_tool  # noqa: F401
