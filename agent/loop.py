@@ -1,5 +1,6 @@
 """AIAgent — ReAct 循环"""
 
+import datetime
 import json
 import logging
 import os
@@ -84,6 +85,8 @@ class AIAgent:
         self._saved_count: int = 0
         # 上下文压缩：消息总字符超限时裁剪历史
         self.max_context_chars: int = 100_000
+        # 冷冻 system prompt 缓存 —— 首次 run_conversation 时构建，全程复用
+        self._frozen_base: str | None = None
 
     # ── 消息构建 ──
 
@@ -168,21 +171,31 @@ class AIAgent:
         except Exception:
             logger.warning("image_inject_failed path=%s", path, exc_info=True)
 
+    # ── 冷冻缓存 ──
+
+    def _ensure_cache(self):
+        """构建冷冻 system prompt 缓存（仅首次执行）。"""
+        if self._frozen_base is not None:
+            return
+        snapshot = self.memory_manager.snapshot()
+        self._frozen_base = self.prompt_builder.build_frozen(
+            memory_snapshot=snapshot,
+            context_files=self.context_files,
+            skills_index=self.skills_index,
+        )
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None) -> str:
-        # system prompt 每次重新构建
-        mem_prompt = self.memory_manager.build_system_prompt()
+        self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
-        if prefetch:
-            mem_prompt = (mem_prompt + "\n\n" + prefetch) if mem_prompt else prefetch
         from tool.toolsets import build_availability_table
-        system = self.prompt_builder.build(
-            memory_prompt=mem_prompt,
-            context_files=self.context_files,
-            skills_index=self.skills_index,
+        dynamic = self.prompt_builder.build_dynamic(
+            prefetch=prefetch,
+            timestamp=str(datetime.date.today()),
             toolset_availability=build_availability_table(),
         )
+        system = (self._frozen_base or "") + "\n\n" + dynamic
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         # 初始化记忆提供者（建库、连接等）

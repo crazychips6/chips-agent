@@ -53,6 +53,21 @@ class MemoryManager:
 
     # ── System Prompt ──
 
+    def snapshot(self) -> str:
+        """冻结快照：仅收集「不随会话变化」的提供者静态块。
+
+        只取 builtin 提供者的 system_prompt_block()（MEMORY.md 快照）。
+        外部提供者的检索走 prefetch，不走这里。
+        """
+        for p in self._providers:
+            if p.name == "builtin":
+                try:
+                    return p.system_prompt_block() or ""
+                except Exception:
+                    logger.debug("提供者 '%s' snapshot 失败", p.name, exc_info=True)
+                    return ""
+        return ""
+
     def build_system_prompt(self) -> str:
         """收集所有提供者的 system prompt 文本。"""
         blocks = []

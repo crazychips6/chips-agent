@@ -123,7 +123,11 @@ CONVENTIONS_PROMPT = """## 回复规范
 class PromptBuilder:
     """System Prompt 组装器。
 
-    build() 接收原始数据、组装各层、超出 max_prompt_chars 时保头保尾截中间。
+    拆分两阶段：
+      build_frozen()  — 一次构建永久缓存（身份 + 记忆快照 + 技能 + 上下文 + 调用约定）
+      build_dynamic() — 每轮重建（实时检索 + 当前时间），量很小
+
+    build() 作为兼容旧接口的封装，委托给 build_frozen()。
     工具感知依赖 OpenAI tools API 参数，不在 system prompt 中冗余列举。
     """
 
@@ -131,6 +135,63 @@ class PromptBuilder:
         self.verbose = verbose
         self.max_prompt_chars = max_prompt_chars
         self._has_verbose_printed = False
+
+    def build_frozen(
+        self,
+        *,
+        memory_snapshot: str = "",
+        context_files: list[tuple[str, str, str]] | None = None,
+        skills_index: str = "",
+    ) -> str:
+        """冷冻层 —— 一次构建，全程复用 (prefix caching 收益最大)。"""
+        layers: list[tuple[str, str]] = []
+
+        # Layer 1 — 核心身份（始终存在）
+        layers.append(("核心身份", IDENTITY_PROMPT))
+
+        # Layer 2 — 持久记忆快照（session 启动时拍，写入后靠 tool response 同步）
+        if memory_snapshot:
+            layers.append(("持久记忆", memory_snapshot.strip()))
+
+        # Layer 3 — 技能索引（可选）
+        if skills_index:
+            layers.append(("技能", skills_index))
+
+        # Layer 4 — 项目上下文（可选）
+        if context_files:
+            parts = []
+            for _path, rel, content in context_files:
+                parts.append(f"文件：{rel}\n{content}")
+            layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
+
+        # Layer 5 — 调用约定（始终存在）
+        layers.append(("调用约定", CONVENTIONS_PROMPT))
+
+        if self.verbose and not self._has_verbose_printed:
+            self._dump_layers(layers)
+            self._has_verbose_printed = True
+
+        return self._assemble_and_truncate(layers)
+
+    def build_dynamic(
+        self,
+        *,
+        prefetch: str = "",
+        timestamp: str = "",
+        toolset_availability: str = "",
+    ) -> str:
+        """动态层 —— 每轮重建，量很小。
+
+        包含实时检索结果、当前时间戳和工具集可用性表。
+        """
+        parts = []
+        if timestamp:
+            parts.append(f"# 当前日期\n{timestamp}")
+        if prefetch:
+            parts.append(f"# 实时上下文\n{prefetch.strip()}")
+        if toolset_availability:
+            parts.append(f"# 可用工具集\n{toolset_availability.strip()}")
+        return "\n\n".join(parts)
 
     def build(
         self,
@@ -140,39 +201,25 @@ class PromptBuilder:
         skills_index: str = "",
         toolset_availability: str = "",
     ) -> str:
+        """完全兼容旧接口。供测试和旧调用方使用。"""
         layers: list[tuple[str, str]] = []
-
-        # Layer 1 — 核心身份（始终存在）
         layers.append(("核心身份", IDENTITY_PROMPT))
-
-        # Layer 2 — 当前日期（始终存在）
         layers.append(("当前日期", f"当前日期：{datetime.date.today()}"))
-
         if memory_prompt:
             layers.append(("持久记忆", memory_prompt.strip()))
-
-        # Skills 索引块（可选，渐进式加载用）
         if skills_index:
             layers.append(("技能", skills_index))
-
-        # 工具集可用性表（可选）
         if toolset_availability:
             layers.append(("可用工具集", toolset_availability))
-
-        # Layer 6 — 项目上下文（可选）
         if context_files:
             parts = []
             for _path, rel, content in context_files:
                 parts.append(f"文件：{rel}\n{content}")
             layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
-
-        # Layer 8 — 调用约定（始终存在）
         layers.append(("调用约定", CONVENTIONS_PROMPT))
-
         if self.verbose and not self._has_verbose_printed:
             self._dump_layers(layers)
             self._has_verbose_printed = True
-
         return self._assemble_and_truncate(layers)
 
     def _dump_layers(self, layers: list[tuple[str, str]]):

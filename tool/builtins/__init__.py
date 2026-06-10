@@ -13,3 +13,4 @@ import tool.builtins.skill_tools  # noqa: F401
 import tool.builtins.toolset_tool  # noqa: F401
 import tool.builtins.todo_tool  # noqa: F401
 import tool.builtins.clarify_tool  # noqa: F401
+import tool.builtins.geo_tool  # noqa: F401
