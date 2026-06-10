@@ -17,3 +17,4 @@ import tool.builtins.geo_tool  # noqa: F401
 import tool.builtins.system_info  # noqa: F401
 import tool.builtins.calendar_tool  # noqa: F401
 import tool.builtins.process_tool  # noqa: F401
+import tool.builtins.agent_tools  # noqa: F401

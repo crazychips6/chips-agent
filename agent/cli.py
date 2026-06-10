@@ -183,6 +183,10 @@ def main():
     from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
     wire_toolset_agent(agent)
 
+    # ── delegate_task 工具接线（子 Agent 委派） ──
+    from tool.builtins.agent_tools import wire_parent
+    wire_parent(agent)
+
     # ── TodoStore（模块级，供 todo 工具使用） ──
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
     wire_todo_store(TodoStore())
