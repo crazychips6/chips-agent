@@ -67,7 +67,7 @@ class AIAgent:
         # 启用的 toolset 名列表（动态开关用），由 cli.py 注入
         self.enabled_toolsets: list[str] = []
         # ── Hot Zone：按 toolset 的 TTL 自动过期机制 ──
-        # toolset 名 → 剩余轮次（启用时 TTL=3，每轮 -1，归零自动退出）
+        # toolset 名 → 剩余轮次（启用时 TTL=2，每轮 -1，归零自动退出）
         self.hot_zone: dict[str, int] = {}
         # 启动时 --toolset 指定的常驻 toolset（不受 hot zone 影响）
         self.permanent_toolsets: list[str] = []
@@ -334,8 +334,8 @@ class AIAgent:
                         if self.registry and self.hot_zone:
                             ts = self.registry.get_toolset_for_tool(name)
                             if ts and ts in self.hot_zone:
-                                self.hot_zone[ts] = 3
-                                logger.debug("hot_zone reset name=%s toolset=%s ttl=3", name, ts)
+                                self.hot_zone[ts] = 2
+                                logger.debug("hot_zone reset name=%s toolset=%s ttl=2", name, ts)
                         # 插件钩子：工具调用后
                         if self.plugin_manager:
                             tool_result = self.plugin_manager.dispatch_tool_call_post(name, tool_result)

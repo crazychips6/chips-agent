@@ -67,11 +67,11 @@ def _handle(args: dict[str, Any]) -> str:
             return f"工具集 '{name}' 已在热区（剩余 {agent.hot_zone[name]} 轮）"
         if name in getattr(agent, "permanent_toolsets", []):
             return f"工具集 '{name}' 已是永久常驻，无需激活"
-        # 加入 hot zone，TTL = 3 轮
-        agent.hot_zone[name] = 3
+        # 加入 hot zone，TTL = 2 轮
+        agent.hot_zone[name] = 2
         ts = get_toolset(name)
         desc = ts.get("description", "") if ts else ""
-        return f"已激活工具集 '{name}'（{desc}），将在 3 轮无使用后自动退出"
+        return f"已激活工具集 '{name}'（{desc}），将在 2 轮无使用后自动退出"
 
     if action == "disable":
         if not name:
