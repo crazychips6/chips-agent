@@ -190,7 +190,19 @@ def main():
     agent_registry = AgentRegistry()
     if agent_registry:
         wire_registry(agent_registry)
-        get_logger().info("agent_registry loaded names=%s", agent_registry.names)
+        # ── 将 agent 角色名注入工具 schema（enum 约束，LLM 第一轮就能选对） ──
+        from tool.registry import registry as _tool_registry
+        _agent_names = agent_registry.names
+        # delegate_task: agent 参数增加 enum 约束
+        _de = _tool_registry._entries["delegate_task"].schema
+        _de["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
+        # orchestrate: steps[].agent + debate agents 数组
+        _orch = _tool_registry._entries.get("orchestrate")
+        if _orch:
+            _os = _orch.schema
+            _os["function"]["parameters"]["properties"]["steps"]["items"]["properties"]["agent"]["enum"] = _agent_names
+            _os["function"]["parameters"]["properties"]["agents"]["items"]["enum"] = _agent_names
+        get_logger().info("agent_registry loaded names=%s injected into delegate_task/orchestrate schema", _agent_names)
 
     # ── TodoStore（模块级，供 todo 工具使用） ──
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store

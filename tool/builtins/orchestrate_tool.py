@@ -271,7 +271,7 @@ ORCHESTRATE_SCHEMA = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "agent": {"type": "string", "description": "Agent 角色名"},
+                            "agent": {"type": "string", "description": "Agent 角色名（可选值见 enum）"},
                             "task": {"type": "string", "description": "子任务描述"},
                             "model": {"type": "string", "description": "可选，覆盖模型"},
                         },

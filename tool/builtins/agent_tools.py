@@ -201,7 +201,7 @@ DELEGATE_SCHEMA = {
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "agents.yaml 中定义的角色 Agent 名",
+                    "description": "角色 Agent 名（可选值见 enum，不指定则走内联参数）",
                 },
                 "task": {
                     "type": "string",
