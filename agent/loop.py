@@ -66,6 +66,13 @@ class AIAgent:
         self.tool_names: set[str] = set()
         # 启用的 toolset 名列表（动态开关用），由 cli.py 注入
         self.enabled_toolsets: list[str] = []
+        # ── Hot Zone：按 toolset 的 TTL 自动过期机制 ──
+        # toolset 名 → 剩余轮次（启用时 TTL=3，每轮 -1，归零自动退出）
+        self.hot_zone: dict[str, int] = {}
+        # 启动时 --toolset 指定的常驻 toolset（不受 hot zone 影响）
+        self.permanent_toolsets: list[str] = []
+        # 本轮已调用的工具名（用于判定 hot zone TTL 是否需要重置）
+        self._used_tools: set[str] = set()
         # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
         self._extra_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
@@ -235,10 +242,14 @@ class AIAgent:
                 }
 
                 # 从 enabled_toolsets 重新解析 tool_names（支持运行时动态开关）
-                if self.registry and self.enabled_toolsets:
-                    from tool.toolsets import resolve_multiple_toolsets
-                    base = resolve_multiple_toolsets(self.enabled_toolsets)
-                    self.tool_names = (set(base) | self._extra_tool_names) & self.registry.tool_names
+                # Hot Zone：core_always_on ∪ hot_zone（TTL>0）∪ permanent（--toolset 指定）
+                if self.registry:
+                    from tool.toolsets import resolve_multiple_toolsets, CORE_ALWAYS_ON
+                    core_tools = CORE_ALWAYS_ON & self.registry.tool_names
+                    hot_tools = set(resolve_multiple_toolsets(list(self.hot_zone.keys()))) if self.hot_zone else set()
+                    perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
+                    self.tool_names = core_tools | hot_tools | perm_tools | self._extra_tool_names
+                    self.tool_names &= self.registry.tool_names
 
                 if self.registry or self.memory_manager.providers:
                     tools = []
@@ -319,6 +330,12 @@ class AIAgent:
                             tool_result = self.registry.dispatch(name, args)
                             elapsed = int((time.time() - t0) * 1000)
                             logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
+                        # Hot Zone TTL 重置：被调用的工具所属 toolset 满血续期
+                        if self.registry and self.hot_zone:
+                            ts = self.registry.get_toolset_for_tool(name)
+                            if ts and ts in self.hot_zone:
+                                self.hot_zone[ts] = 3
+                                logger.debug("hot_zone reset name=%s toolset=%s ttl=3", name, ts)
                         # 插件钩子：工具调用后
                         if self.plugin_manager:
                             tool_result = self.plugin_manager.dispatch_tool_call_post(name, tool_result)
@@ -335,6 +352,16 @@ class AIAgent:
                         # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
                         self._maybe_inject_image(tool_result)
                     self._save_pending()
+                    # Hot Zone TTL 衰减：每轮结束，所有 hot zone 剩余轮次 -1
+                    if self.hot_zone:
+                        _expired = [k for k, v in self.hot_zone.items() if v <= 1]
+                        for k in _expired:
+                            del self.hot_zone[k]
+                            logger.info("hot_zone expired toolset=%s", k)
+                        for k in list(self.hot_zone.keys()):
+                            self.hot_zone[k] -= 1
+                        if _expired:
+                            logger.info("hot_zone after_decay=%s", self.hot_zone)
                 else:
                     content = result.content or ""
                     if self.plugin_manager:

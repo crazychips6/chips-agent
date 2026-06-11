@@ -17,12 +17,16 @@ from __future__ import annotations
 from typing import Any
 
 
+# 始终暴露给 LLM 的核心工具名（不受 hot zone / permanent 影响）
+# 这些工具的 schema 每轮都在 tools 参数中，LLM 永远可以调用
+CORE_ALWAYS_ON = {"echo", "clarify", "todo", "toolset", "delegate_task", "orchestrate"}
+
 # ── 静态定义 ──
 
 TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "core": {
-        "description": "核心工具集（terminal + file + web + vision + skills + system + process）",
-        "includes": ["terminal", "file", "web", "vision", "skills", "geo", "system", "process"],
+        "description": "核心工具集（terminal + file，兼容 --toolset core）",
+        "includes": ["terminal", "file"],
     },
     "terminal": {"description": "终端命令执行"},
     "file":     {"description": "文件读写与搜索"},
@@ -31,12 +35,13 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "skills":   {"description": "技能系统管理"},
     "todo":     {"description": "任务规划与进度跟踪"},
     "clarify":  {"description": "向用户追问澄清"},
+    "calendar": {"description": "日程与日历管理"},
     "geo":      {"description": "基于 IP 的地理位置查询"},
     "system":   {"description": "系统信息查询（OS、CPU、内存、磁盘）"},
     "process":  {"description": "进程管理（列出/查看/终止）"},
     "all": {
         "description": "全部可用工具",
-        "includes": ["core"],
+        "includes": ["core", "web", "vision", "skills", "calendar", "geo", "system", "process"],
     },
 }
 

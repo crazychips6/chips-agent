@@ -138,8 +138,9 @@ def get_agent():
         agent.registry = registry
         toolset_cfg = os.getenv("CHIPS_TOOLSET", "core")
         ts_names = [n.strip() for n in toolset_cfg.split(",")]
-        agent.enabled_toolsets = list(ts_names)
-        agent.tool_names = set(resolve_multiple_toolsets(ts_names)) & registry.tool_names
+        agent.permanent_toolsets = list(ts_names)
+        from tool.toolsets import CORE_ALWAYS_ON
+        agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(ts_names))) & registry.tool_names
 
         # 记忆
         memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")

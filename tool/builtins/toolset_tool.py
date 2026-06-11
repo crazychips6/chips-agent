@@ -37,36 +37,49 @@ def _handle(args: dict[str, Any]) -> str:
     name = args.get("name", "")
 
     if action == "list":
-        lines = ["当前工具集状态："]
-        for ts_name in sorted(agent.enabled_toolsets):
-            ok = is_toolset_available(ts_name)
-            ts = get_toolset(ts_name)
-            desc = ts.get("description", "") if ts else ""
-            tools = resolve_toolset(ts_name)
-            status = "✓" if ok else "✗"
-            lines.append(f"  [{status}] {ts_name} — {desc} ({len(tools)} 个工具)")
-        lines.append(f"\n可用工具总数: {len(agent.tool_names)}")
+        from tool.toolsets import CORE_ALWAYS_ON
+        lines = ["当前工具状态："]
+        lines.append(f"  [★] core — 始终可用（{len(CORE_ALWAYS_ON)} 个核心工具）")
+        if agent.permanent_toolsets:
+            for ts_name in sorted(agent.permanent_toolsets):
+                ts = get_toolset(ts_name)
+                desc = ts.get("description", "") if ts else ""
+                tools = resolve_toolset(ts_name)
+                lines.append(f"  [📌] {ts_name} — {desc}（永久常驻，{len(tools)} 个工具）")
+        if agent.hot_zone:
+            for ts_name in sorted(agent.hot_zone):
+                tt = agent.hot_zone[ts_name]
+                ts = get_toolset(ts_name)
+                desc = ts.get("description", "") if ts else ""
+                lines.append(f"  [🔥] {ts_name} — {desc}（剩余 {tt} 轮）")
+        else:
+            lines.append("  （无热区工具，使用 toolset enable 激活）")
+        lines.append(f"\n可用工具总数: {len(agent.tool_names)}"
+                     f"  |  工具集: toolset list 查看详情  |  启用: toolset enable <名>")
         return "\n".join(lines)
 
     if action == "enable":
         if not name:
             return json.dumps({"error": "enable 需要 name 参数"})
-        if name in agent.enabled_toolsets:
-            return f"工具集 '{name}' 已启用，无需重复操作"
         if not get_toolset(name):
             return json.dumps({"error": f"未知工具集: {name}"})
-        agent.enabled_toolsets.append(name)
-        return f"已启用工具集 '{name}'，后续轮次即可使用"
+        if name in agent.hot_zone:
+            return f"工具集 '{name}' 已在热区（剩余 {agent.hot_zone[name]} 轮）"
+        if name in getattr(agent, "permanent_toolsets", []):
+            return f"工具集 '{name}' 已是永久常驻，无需激活"
+        # 加入 hot zone，TTL = 3 轮
+        agent.hot_zone[name] = 3
+        ts = get_toolset(name)
+        desc = ts.get("description", "") if ts else ""
+        return f"已激活工具集 '{name}'（{desc}），将在 3 轮无使用后自动退出"
 
     if action == "disable":
         if not name:
             return json.dumps({"error": "disable 需要 name 参数"})
-        if name == "core":
-            return "不能禁用核心工具集（toolset 工具在此工具集中）"
-        if name not in agent.enabled_toolsets:
-            return f"工具集 '{name}' 未启用，无需禁用"
-        agent.enabled_toolsets.remove(name)
-        return f"已禁用工具集 '{name}'"
+        if name in agent.hot_zone:
+            del agent.hot_zone[name]
+            return f"工具集 '{name}' 已从热区移除"
+        return f"工具集 '{name}' 不在热区中"
 
     return json.dumps({"error": f"未知操作: {action}（支持: enable, disable, list）"})
 
