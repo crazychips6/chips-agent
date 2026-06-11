@@ -330,6 +330,13 @@ class AIAgent:
                             tool_result = self.registry.dispatch(name, args)
                             elapsed = int((time.time() - t0) * 1000)
                             logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
+                            # Hot Zone: 如果 LLM 调用了 toolset 名而非工具名，给提示
+                            if tool_result.startswith('{"error": "unknown tool:'):
+                                from tool.toolsets import get_toolset
+                                if get_toolset(name):
+                                    tool_result = json.dumps({
+                                        "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
+                                    })
                         # Hot Zone TTL 重置：被调用的工具所属 toolset 满血续期
                         if self.registry and self.hot_zone:
                             ts = self.registry.get_toolset_for_tool(name)
