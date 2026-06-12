@@ -1,10 +1,9 @@
 """TUI — 终端用户界面
 
-职责：
-  1. 启动信息面板
-  2. 对话流式输出（Markdown 渲染）
-  3. 工具调用提示（规划中）
-  4. 用量统计显示
+仿 Hermes CLI 风格：
+  - prompt_toolkit ANSI 渲染（`_cprint`），避免 rich.Live 的线程问题
+  - 行缓冲流式输出，unicode 边框符绘制对话气泡
+  - rich 仅用于：启动信息 Panel + 最终回复 Markdown 渲染
 
 使用方式：
   tui = TUI()
@@ -15,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
@@ -23,26 +23,54 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("chips.tui")
 
+# ── ANSI 颜色常量 ──
+
+_ACCENT = "\033[1;38;2;100;255;218m"  # cyan bold (chips accent)
+_DIM = "\033[38;2;100;100;120m"       # dim gray
+_RST = "\033[0m"                       # reset
+
+# ── prompt_toolkit ANSI 渲染 ──
+
+try:
+    from prompt_toolkit import print_formatted_text as _pt_print
+    from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
+    _HAS_PT = True
+except ImportError:
+    _HAS_PT = False
+
+
+def _cprint(text: str) -> None:
+    """通过 prompt_toolkit 渲染 ANSI 彩色文本（兼容 patch_stdout）。"""
+    if _HAS_PT:
+        _pt_print(_PT_ANSI(text))
+    else:
+        print(text)
+
+
+# ── rich（可选） ──
+
 ENABLE_RICH = True
 try:
-    from rich.console import Console as _RichConsole
-    from rich.live import Live as _RichLive
     from rich.markdown import Markdown as _RichMarkdown
     from rich.panel import Panel as _RichPanel
-    from rich.rule import Rule as _RichRule
-    from rich.text import Text as _RichText
 except ImportError:
     ENABLE_RICH = False
 
 
+# ── 流式输出状态 ──
+
+
 @dataclass
 class _StreamState:
-    """流式输出的累计状态"""
-    buffer: str = ""
-    final_reply: str = ""
-    live: object = None  # rich.live.Live 实例，仅 rich 模式使用
-    on_first_chunk: Callable | None = None
-    _first: bool = True
+    """每次 chat() 调用的内部状态。"""
+    buffer: str = ""            # 完整累计内容
+    stream_buf: str = ""        # 行缓冲：未刷新的部分行
+    box_opened: bool = False    # 是否已打开回复框
+    started: bool = False       # 是否收到首个 chunk
+    final_markdown: str = ""    # 最终要渲染的 Markdown（仅在 rich 模式使用）
+
+
+# ── TUI 主类 ──
 
 
 class TUI:
@@ -51,8 +79,9 @@ class TUI:
     def __init__(self):
         self._rich = ENABLE_RICH
         if self._rich:
-            self._console = _RichConsole()
-        self._current_chat: _StreamState | None = None
+            from rich.console import Console
+            self._console = Console(highlight=False)
+        self._state: _StreamState | None = None
 
     # ── 对外接口 ──
 
@@ -71,51 +100,32 @@ class TUI:
         """显示启动信息面板。"""
         if self._rich:
             self._print_startup_panel(
-                model=model,
-                tool_count=tool_count,
-                toolset_names=toolset_names,
-                memory_status=memory_status,
-                mcp_status=mcp_status,
-                skill_status=skill_status,
-                compress_status=compress_status,
+                model=model, tool_count=tool_count, toolset_names=toolset_names,
+                memory_status=memory_status, mcp_status=mcp_status,
+                skill_status=skill_status, compress_status=compress_status,
                 context_file_count=context_file_count,
             )
         else:
             self._print_startup_plain(
-                model=model,
-                tool_count=tool_count,
-                toolset_names=toolset_names,
-                memory_status=memory_status,
-                mcp_status=mcp_status,
-                skill_status=skill_status,
-                compress_status=compress_status,
+                model=model, tool_count=tool_count, toolset_names=toolset_names,
+                memory_status=memory_status, mcp_status=mcp_status,
+                skill_status=skill_status, compress_status=compress_status,
                 context_file_count=context_file_count,
             )
 
     def chat(self, agent: AIAgent, text: str, max_iterations: int = 20) -> str:
         """对话单轮：展示用户消息 → 流式输出助理回复 → 返回完整文本。"""
         state = _StreamState()
-        self._current_chat = state
+        self._state = state
 
-        # 展示用户消息
         self._show_user_message(text)
 
-        # 流式回调 —— 由 agent.run_conversation 的 chunk_callback 调用
         def _on_chunk(chunk: str):
-            if state._first:
-                state._first = False
-                self._begin_assistant(state)
+            if not state.started:
+                state.started = True
+                self._open_response_box(state)
             state.buffer += chunk
-            self._update_assistant(state)
-
-        # 启动 Live（rich 模式）
-        if self._rich:
-            state.live = _RichLive(
-                _RichPanel("", title="🤖 chips"),
-                refresh_per_second=12,
-                transient=False,
-            )
-            state.live.__enter__()
+            self._stream_chunk(state, chunk)
 
         try:
             reply = agent.run_conversation(
@@ -124,70 +134,65 @@ class TUI:
                 chunk_callback=_on_chunk,
             )
         finally:
-            if state.live is not None:
-                state.live.__exit__(None, None, None)
+            if state.box_opened:
+                self._close_response_box(state)
 
-        # 最终呈现
         final = reply or state.buffer
-        state.final_reply = final
-        is_streaming = not state._first and not reply
-        if self._rich and final:
-            # rich 模式：Live 退出后渲染最终 Markdown Panel
-            self._console.print(_RichPanel(
-                _RichMarkdown(final),
-                title="🤖 chips",
-                border_style="green",
-            ))
-        elif not is_streaming and final:
-            # 非流式纯文本：打印完整回复
-            print(final)
-        # 流式纯文本：已逐 token 输出，不再重复打印
+        state.final_markdown = final
+        is_streaming = state.started and not reply
 
-        self._current_chat = None
+        # 非流式模式：打印完整回复
+        if not is_streaming and final:
+            if self._rich:
+                self._console.print(_RichPanel(
+                    _RichMarkdown(final),
+                    title="🤖 chips",
+                    border_style="green",
+                ))
+            else:
+                print(final)
+
+        self._state = None
         return final
 
-    # ── 内部方法 ──
+    # ── 用户消息展示 ──
 
     def _show_user_message(self, text: str) -> None:
         """在对话流中展示用户消息。"""
-        if self._rich:
-            self._console.print()
-            self._console.print(_RichRule(style="dim white"))
-            self._console.print(f"[bold]你[/]  {text}")
-            self._console.print()
-        else:
-            print()
-            print(f"你  {text}")
-            print()
+        w = shutil.get_terminal_size().columns
+        _cprint(f"\n{_DIM}{'─' * w}{_RST}")
+        _cprint(f"{_ACCENT}●{_RST} {text}")
 
-    def _begin_assistant(self, state: _StreamState) -> None:
-        """流式开始前的准备工作（rich 模式下由 Live 接管）。"""
-        if not self._rich:
-            print("🤖 chips  ", end="", flush=True)
+    # ── 回复框 ──
 
-    def _update_assistant(self, state: _StreamState) -> None:
-        """流式进行中：刷新显示。"""
-        if state.live is not None:
-            text = state.buffer
-            # 短内容用纯文本，累积到一定长度后渲染 Markdown
-            if len(text) > 80:
-                state.live.update(_RichPanel(
-                    _RichMarkdown(text),
-                    title="🤖 chips",
-                ))
-            else:
-                state.live.update(_RichPanel(
-                    text,
-                    title="🤖 chips",
-                ))
-        else:
-            # 纯文本模式：逐 token 打印
-            print(state.buffer[-1:], end="", flush=True)
+    def _open_response_box(self, state: _StreamState) -> None:
+        """打开回复框的顶边框。"""
+        w = shutil.get_terminal_size().columns
+        label = "🤖 chips"
+        fill = w - 2 - len(label)
+        _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
+        state.box_opened = True
 
-    # ── startup 的具体实现 ──
+    def _close_response_box(self, state: _StreamState) -> None:
+        """关闭回复框的底边框 + 刷新行缓冲。"""
+        if state.stream_buf:
+            _cprint(f"    {state.stream_buf}")
+            state.stream_buf = ""
+        w = shutil.get_terminal_size().columns
+        _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
+
+    # ── 流式输出（行缓冲） ──
+
+    def _stream_chunk(self, state: _StreamState, chunk: str) -> None:
+        """行缓冲流式输出：将文本按行分割，完整行立即刷新。"""
+        state.stream_buf += chunk
+        while "\n" in state.stream_buf:
+            line, state.stream_buf = state.stream_buf.split("\n", 1)
+            _cprint(f"    {line}")
+
+    # ── 启动 Panel ──
 
     def _print_startup_panel(self, **kw):
-        from rich.panel import Panel
         model = kw["model"]
         tool_count = kw["tool_count"]
         toolset_str = ", ".join(
@@ -210,7 +215,7 @@ class TUI:
             parts.append(f"Files: {kw['context_file_count']}")
         if parts:
             lines.append(f"[dim]{'  |  '.join(parts)}[/]")
-        self._console.print(Panel(
+        self._console.print(_RichPanel(
             "\n".join(lines),
             title="[bold cyan]chips[/]",
             border_style="cyan",
