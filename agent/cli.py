@@ -297,6 +297,7 @@ def main():
         return
 
     print("输入 /help 查看命令, /exit 退出")
+    print()  # 首条消息前空一行
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
     from agent.repl_prompt_toolkit import PromptToolkitInputBackend

@@ -303,6 +303,9 @@ class TUI:
             # 流式写入，无缓冲直接输出（不支持折行，以保留流式感）
             sys.stdout.write(chunk)
             sys.stdout.flush()
+            # 跟踪实际行数，确保 _focus.end() 能准确定位 ○ 行
+            if self._focus._stack:
+                self._focus._stack[-1].height += chunk.count('\n')
 
         def _on_tool(name: str, args: dict, result: str | None):
             if result is None:
@@ -329,6 +332,7 @@ class TUI:
 
         # 关闭 chips 聚焦
         self._focus.end()
+        sys.stdout.write("\n")  # 与下一个输入之间保留空行
 
         final = reply or state.buffer
         state.final_reply = final
@@ -339,6 +343,7 @@ class TUI:
             sys.stdout.write("\n")
             self._focus.writeln(f" {final}")
             self._focus.end()
+            sys.stdout.write("\n")
 
         # 安全清理
         self._focus.clear()
