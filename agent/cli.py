@@ -17,7 +17,7 @@ from plugins import PluginManager
 from plugins.mcp import MCPManager
 from session.db import SessionDB
 from tool.registry import registry
-from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets, get_toolset, is_toolset_available
+from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
@@ -253,45 +253,50 @@ def main():
     recorder._session_db = session_db
     recorder._session_id = agent.session_id
 
+    # ── TUI 初始化 ──
+    from agent.tui import TUI
+    tui = TUI()
+
     # ── 日志初始化 ──
     setup_logging(session_id=agent.session_id)
     get_logger().info("session started")
-
-    if args.message:
-        reply = agent.run_conversation(args.message)
-        if reply:
-            print(reply)
-        stats = recorder.format_summary()
-        if stats:
-            print(f"\n{stats}")
-        return
 
     # ── 技能系统（REPL 模式） ──
     from agent.skill import SkillManager
     from tool.builtins.skill_tools import wire_skill_manager, wire_plugin_manager
 
     skill_mgr = SkillManager()
-    skill_scan_count = skill_mgr.scan()
+    skill_mgr.scan()
     agent.skills_index = skill_mgr.get_skills_index_prompt()
     wire_skill_manager(skill_mgr)
     wire_plugin_manager(plugin_mgr)
 
-    ctx_count = len(agent.context_files)
     mem_status = "off"
     if agent.memory_manager.providers:
         provider_names = [p.name for p in agent.memory_manager.providers]
         mem_status = "+".join(provider_names)
-    print(f"chips v0.3.0 — model: {args.model}  base_url: {args.base_url}")
-    compress_status = "off" if args.no_compress else "on"
     mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
     skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
-    avail_parts = []
-    for ts_name in toolset_names:
-        if get_toolset(ts_name):
-            ok = is_toolset_available(ts_name)
-            icon = "✓" if ok else "✗"
-            avail_parts.append(f"{ts_name}{icon}")
-    print(f"工具集: {' '.join(avail_parts)}  |  已加载工具: {len(agent.tool_names)}  |  记忆: {mem_status}  |  上下文文件: {ctx_count}  |  压缩: {compress_status}  |  MCP: {mcp_status}  |  技能: {skill_status}")
+    compress_status = "off" if args.no_compress else "on"
+
+    tui.startup(
+        model=args.model,
+        tool_count=len(agent.tool_names),
+        toolset_names=toolset_names,
+        memory_status=mem_status,
+        mcp_status=mcp_status,
+        skill_status=skill_status,
+        compress_status=compress_status,
+        context_file_count=len(agent.context_files),
+    )
+
+    if args.message:
+        tui.chat(agent, args.message)
+        stats = recorder.format_summary()
+        if stats:
+            print(f"\n{stats}")
+        return
+
     print("输入 /help 查看命令, /exit 退出")
 
     from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
@@ -304,6 +309,7 @@ def main():
         input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
         output_backend=StdioOutputBackend(),
         cmd_registry=cmd_reg,
+        tui=tui,
     )
     loop.run()
     stats = recorder.format_summary()

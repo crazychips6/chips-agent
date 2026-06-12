@@ -83,11 +83,12 @@ class CommandRegistry:
 class ReplLoop:
     """通用的 REPL 事件循环。"""
 
-    def __init__(self, agent, input_backend, output_backend, cmd_registry: CommandRegistry):
+    def __init__(self, agent, input_backend, output_backend, cmd_registry: CommandRegistry, *, tui=None):
         self.agent = agent
         self.input = input_backend
         self.output = output_backend
         self.cmd = cmd_registry
+        self.tui = tui
 
     def run(self):
         while not self.cmd.should_exit:
@@ -102,8 +103,11 @@ class ReplLoop:
                 if msg:
                     self.output.write(msg)
                 continue
-            reply = self.agent.run_conversation(text)
-            if reply:
-                self.output.write(reply)
+            if self.tui:
+                self.tui.chat(self.agent, text)
+            else:
+                reply = self.agent.run_conversation(text)
+                if reply:
+                    self.output.write(reply)
         self.input.close()
         self.output.close()
