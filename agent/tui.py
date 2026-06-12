@@ -220,10 +220,9 @@ class TUI:
             "╚═╝ ╩ ╩ ╩ ╩   ╚═╝",
         ]
         prefix = "╭─ "
-        sep = " ── "
         b1_vis = _vis_len(_banner[0])
-        fill = w - len(prefix) - b1_vis - len(sep) - 1
-        _cprint(f"\n{_ACCENT}{prefix}{_banner[0]}{sep}{'─' * max(fill, 0)}╮{_RST}")
+        fill = w - len(prefix) - b1_vis - 1  # ╮
+        _cprint(f"\n{_ACCENT}{prefix}{_banner[0]}{'─' * max(fill, 0)}╮{_RST}")
         for _b in _banner[1:]:
             self._box_line(f"{_ACCENT}{_b}{_RST}", w)
         self._box_line("", w)
@@ -236,7 +235,7 @@ class TUI:
         """打印盒子内的一行文字（带两侧边框），自动处理 ANSI 控制符长度。"""
         prefix = _DIM if dim else ""
         visible = _vis_len(text)
-        pad = width - 4 - visible  # │ + space + text + space + │
+        pad = width - 3 - visible  # │ + space + text + │
         _cprint(f"{_ACCENT}│{_RST} {prefix}{text}{_RST}{' ' * max(pad, 1)}{_ACCENT}│{_RST}")
 
     def _print_startup_plain(self, **kw):
