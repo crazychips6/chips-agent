@@ -104,7 +104,7 @@ class ReplLoop:
                     self.output.write(msg)
                 continue
             if self.tui:
-                self.tui.chat(self.agent, text)
+                self.tui.chat(self.agent, text, clear_prompt=True)
             else:
                 reply = self.agent.run_conversation(text)
                 if reply:

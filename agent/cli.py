@@ -163,7 +163,6 @@ def main():
     plugin_mgr.add_default_paths()
     loaded = plugin_mgr.load_all()
     if loaded:
-        from agent.logger import get_logger
         get_logger().info("plugins_loaded count=%d", loaded)
     agent.plugin_manager = plugin_mgr
     # 插件注册的工具需要额外加入 agent 可用工具列表（不受 toolset 开关影响）
