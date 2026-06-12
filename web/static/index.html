@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>chips Chat</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.6/marked.min.js"></script>
 <style>
   :root {
     --bg: #1a1a2e;
@@ -36,14 +39,39 @@
   /* 聊天 */
   #chat-container { flex: 1; display: flex; flex-direction: column; max-width: 800px; width: 100%; margin: 0 auto; }
   #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
-  .msg { max-width: 85%; padding: 12px 16px; border-radius: var(--radius); line-height: 1.5; font-size: 15px; white-space: pre-wrap; }
+  .msg { max-width: 85%; padding: 12px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 15px; }
   .msg.user { background: var(--surface2); align-self: flex-end; border-bottom-right-radius: 4px; }
   .msg.assistant { background: var(--surface); align-self: flex-start; border-bottom-left-radius: 4px; }
   .msg.assistant.streaming { border-left: 2px solid var(--accent); }
   .msg.error { background: #3d1f1f; align-self: center; color: var(--danger); font-size: 13px; }
-  .msg code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 13px; }
-  .msg pre { background: #0d1117; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+
+  /* Markdown */
+  .msg p { margin: 4px 0; }
+  .msg p:first-child { margin-top: 0; }
+  .msg p:last-child { margin-bottom: 0; }
+  .msg ul, .msg ol { padding-left: 20px; margin: 4px 0; }
+  .msg table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 14px; }
+  .msg th, .msg td { border: 1px solid var(--surface2); padding: 6px 10px; text-align: left; }
+  .msg th { background: var(--surface2); font-weight: 600; }
+  .msg blockquote { border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--text-dim); }
+  .msg a { color: var(--accent); text-decoration: underline; }
+
+  /* 代码块 */
+  .msg pre { position: relative; background: #0d1117; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+  .msg pre code { background: none; padding: 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; }
+  .msg code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
   .msg pre code { background: none; padding: 0; }
+  .copy-btn { position: absolute; top: 6px; right: 6px; background: var(--surface2); color: var(--text-dim); border: none; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; opacity: 0; transition: opacity 0.2s; }
+  .msg pre:hover .copy-btn { opacity: 1; }
+  .copy-btn:hover { background: var(--accent); color: #1a1a2e; }
+  .copy-btn.copied { background: var(--accent); color: #1a1a2e; opacity: 1; }
+
+  /* 加载动画 */
+  .typing-indicator { display: flex; gap: 4px; padding: 4px 0; }
+  .typing-dot { width: 8px; height: 8px; background: var(--text-dim); border-radius: 50%; animation: typing 1.4s infinite ease-in-out; }
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); } 30% { opacity: 1; transform: scale(1); } }
 
   /* 输入 */
   #input-area { padding: 16px 20px; background: var(--surface); border-top: 1px solid var(--surface2); display: flex; gap: 10px; }
@@ -51,13 +79,10 @@
   #input-area textarea:focus { border-color: var(--accent); }
   #input-area button { padding: 12px 24px; border-radius: var(--radius); border: none; background: var(--accent); color: #1a1a2e; font-weight: 600; cursor: pointer; font-size: 15px; white-space: nowrap; }
   #input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
-  #loading { display: none; }
-  #loading.active { display: inline-block; }
 </style>
 </head>
 <body>
 
-<!-- 登录 -->
 <div id="login-screen">
   <h2 style="margin-bottom:8px">chips</h2>
   <input id="login-user" type="text" placeholder="用户名" value="admin">
@@ -66,7 +91,6 @@
   <button onclick="login()">登录</button>
 </div>
 
-<!-- 聊天 -->
 <div id="chat-screen" class="hidden">
   <div id="header">
     <div><h1>chips</h1><span class="sub">connected</span></div>
@@ -86,7 +110,6 @@ const API = '';
 let token = localStorage.getItem('token') || '';
 let currentMsg = null;
 
-// 自动登录
 if (token) initChat();
 
 async function login() {
@@ -123,7 +146,30 @@ function initChat() {
 function addMessage(role, content, streaming=false) {
   const el = document.createElement('div');
   el.className = 'msg ' + role + (streaming ? ' streaming' : '');
-  el.textContent = content;
+
+  if (role === 'assistant' && content && !streaming) {
+    el.innerHTML = marked.parse(content);
+    el.querySelectorAll('pre code').forEach(block => {
+      hljs.highlightElement(block);
+      const wrapper = block.parentElement;
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = '复制';
+      btn.onclick = () => {
+        navigator.clipboard.writeText(block.textContent).then(() => {
+          btn.textContent = '已复制!';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 2000);
+        });
+      };
+      wrapper.appendChild(btn);
+    });
+  } else if (streaming && content) {
+    el.textContent = content;
+  } else {
+    el.textContent = content;
+  }
+
   document.getElementById('messages').appendChild(el);
   el.scrollIntoView({behavior: 'smooth'});
   return el;
@@ -184,7 +230,27 @@ async function send() {
     msgEl.className = 'msg error';
   }
 
-  msgEl.classList.remove('streaming');
+  // 流式结束后用 Markdown 渲染
+  if (buffer) {
+    msgEl.classList.remove('streaming');
+    msgEl.innerHTML = marked.parse(buffer);
+    msgEl.querySelectorAll('pre code').forEach(block => {
+      hljs.highlightElement(block);
+      const wrapper = block.parentElement;
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = '复制';
+      btn.onclick = () => {
+        navigator.clipboard.writeText(block.textContent).then(() => {
+          btn.textContent = '已复制!';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 2000);
+        });
+      };
+      wrapper.appendChild(btn);
+    });
+  }
+
   btn.disabled = false;
   document.getElementById('input').focus();
 }

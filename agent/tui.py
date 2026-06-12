@@ -127,17 +127,21 @@ class TUI:
             if state.live is not None:
                 state.live.__exit__(None, None, None)
 
-        # 最终呈现：Markdown 渲染完整回复
+        # 最终呈现
         final = reply or state.buffer
         state.final_reply = final
+        is_streaming = not state._first and not reply
         if self._rich and final:
+            # rich 模式：Live 退出后渲染最终 Markdown Panel
             self._console.print(_RichPanel(
                 _RichMarkdown(final),
                 title="🤖 chips",
                 border_style="green",
             ))
-        elif final:
+        elif not is_streaming and final:
+            # 非流式纯文本：打印完整回复
             print(final)
+        # 流式纯文本：已逐 token 输出，不再重复打印
 
         self._current_chat = None
         return final
