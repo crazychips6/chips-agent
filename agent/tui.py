@@ -27,6 +27,7 @@ logger = logging.getLogger("chips.tui")
 
 _ACCENT = "\033[1;38;2;100;255;218m"  # cyan bold (chips accent)
 _DIM = "\033[38;2;100;100;120m"       # dim gray
+_FRIES = "\033[1;38;2;255;200;0m"     # golden yellow（薯条）
 _RST = "\033[0m"                       # reset
 
 # ── prompt_toolkit ANSI 渲染 ──
@@ -37,6 +38,15 @@ try:
     _HAS_PT = True
 except ImportError:
     _HAS_PT = False
+
+
+import re
+_ANSI_RE = re.compile(r'\033\[[0-9;]*m')
+
+
+def _vis_len(text: str) -> int:
+    """返回去除 ANSI 控制符后的可见字符长度。"""
+    return len(_ANSI_RE.sub('', text))
 
 
 def _cprint(text: str) -> None:
@@ -204,18 +214,28 @@ class TUI:
         if kw["context_file_count"]:
             footer_parts.append(f"Files: {kw['context_file_count']}")
 
+        # 薯条 ASCII art
+        _fries = [
+            "    ╔══╗ ╔══╗ ╔══╗",
+            "    ║  ║ ║  ║ ║  ║",
+            "    ╚╤═╝ ╚╤═╝ ╚╤═╝",
+            "     ╘╛   ╘╛   ╘╛",
+        ]
         label = " chips "
         _cprint(f"\n{_ACCENT}╭─{label}{'─' * (w - 5 - len(label))}╮{_RST}")
+        for _f in _fries:
+            self._box_line(f"{_FRIES}{_f}{_RST}", w)
+        self._box_line("", w)  # 空行分隔
         self._box_line(f"Model: {model}  |  Tools: {tool_count} ({toolset_str})", w)
         if footer_parts:
             self._box_line(f"{'  |  '.join(footer_parts)}", w, dim=True)
         _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
 
     def _box_line(self, text: str, width: int, dim: bool = False) -> None:
-        """打印盒子内的一行文字（带两侧边框）。"""
+        """打印盒子内的一行文字（带两侧边框），自动处理 ANSI 控制符长度。"""
         prefix = _DIM if dim else ""
-        content = f"  {text}"
-        pad = width - 4 - len(text)  # │ + space + text + space + │
+        visible = _vis_len(text)
+        pad = width - 4 - visible  # │ + space + text + space + │
         _cprint(f"{_ACCENT}│{_RST} {prefix}{text}{_RST}{' ' * max(pad, 1)}{_ACCENT}│{_RST}")
 
     def _print_startup_plain(self, **kw):
