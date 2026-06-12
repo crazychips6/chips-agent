@@ -3,9 +3,7 @@ import { Button } from '@/components/ui/button'
 import useChatActions from '@/hooks/useChatActions'
 import { useStore } from '@/store'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useState, useEffect, useCallback } from 'react'
-import { isValidUrl } from '@/lib/utils'
-import { toast } from 'sonner'
+import { useState, useEffect } from 'react'
 
 const SidebarHeader = () => (
   <div className="flex items-center gap-2 px-1">
@@ -33,133 +31,6 @@ const NewChatButton = ({
   </Button>
 )
 
-const DEFAULT_ENDPOINT = 'http://localhost:8648'
-
-const Endpoint = () => {
-  const { selectedEndpoint, isEndpointActive, setSelectedEndpoint, setMessages } = useStore()
-  const { initialize } = useChatActions()
-  const [isEditing, setIsEditing] = useState(false)
-  const [endpointValue, setEndpointValue] = useState('')
-  const [isMounted, setIsMounted] = useState(false)
-  const [isHovering, setIsHovering] = useState(false)
-  const [isRotating, setIsRotating] = useState(false)
-
-  useEffect(() => {
-    setEndpointValue(selectedEndpoint)
-    setIsMounted(true)
-  }, [selectedEndpoint])
-
-  const getStatusColor = (isActive: boolean) =>
-    isActive ? 'bg-positive' : 'bg-destructive'
-
-  const handleSave = async () => {
-    if (!isValidUrl(endpointValue)) {
-      toast.error('Please enter a valid URL')
-      return
-    }
-    const cleanEndpoint = endpointValue.replace(/\/$/, '').trim()
-    setSelectedEndpoint(cleanEndpoint)
-    setIsEditing(false)
-    setIsHovering(false)
-    setMessages([])
-  }
-
-  const handleCancel = () => {
-    setEndpointValue(selectedEndpoint)
-    setIsEditing(false)
-    setIsHovering(false)
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') handleSave()
-    else if (e.key === 'Escape') handleCancel()
-  }
-
-  const handleRefresh = async () => {
-    setIsRotating(true)
-    await initialize()
-    setTimeout(() => setIsRotating(false), 500)
-  }
-
-  return (
-    <div className="flex flex-col items-start gap-2">
-      <div className="text-xs font-medium uppercase text-muted">Server</div>
-      {isEditing ? (
-        <div className="flex w-full items-center gap-1">
-          <input
-            type="text"
-            value={endpointValue}
-            onChange={(e) => setEndpointValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="flex h-9 w-full items-center text-ellipsis rounded-xl border border-primary/15 bg-white p-3 text-xs font-medium text-secondary"
-            autoFocus
-          />
-          <Button variant="ghost" size="icon" onClick={handleSave} className="hover:cursor-pointer hover:bg-transparent">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B46C1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </Button>
-        </div>
-      ) : (
-        <div className="flex w-full items-center gap-1">
-          <motion.div
-            className="relative flex h-9 w-full cursor-pointer items-center justify-between rounded-xl border border-primary/15 bg-white p-3"
-            onMouseEnter={() => setIsHovering(true)}
-            onMouseLeave={() => setIsHovering(false)}
-            onClick={() => setIsEditing(true)}
-            transition={{ type: 'spring', stiffness: 400, damping: 10 }}
-          >
-            <AnimatePresence mode="wait">
-              {isHovering ? (
-                <motion.div
-                  key="endpoint-hover"
-                  className="absolute inset-0 flex items-center justify-center"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <p className="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-primary">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                    EDIT
-                  </p>
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="endpoint-display"
-                  className="absolute inset-0 flex items-center justify-between px-3"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <p className="text-xs font-medium text-muted truncate">
-                    {isMounted ? endpointValue || 'No endpoint' : DEFAULT_ENDPOINT}
-                  </p>
-                  <div className={`size-2 shrink-0 rounded-full ${getStatusColor(isEndpointActive)}`} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-          <Button variant="ghost" size="icon" onClick={handleRefresh} className="hover:cursor-pointer hover:bg-transparent">
-            <motion.div
-              key={isRotating ? 'rotating' : 'idle'}
-              animate={{ rotate: isRotating ? 360 : 0 }}
-              transition={{ duration: 0.5, ease: 'easeInOut' }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#718096" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-              </svg>
-            </motion.div>
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 interface SidebarProps {
   isMobileOpen: boolean
   onMobileClose: () => void
@@ -182,34 +53,25 @@ const Sidebar = ({ isMobileOpen, onMobileClose }: SidebarProps) => {
     onMobileClose()
   }
 
-  // Sidebar content - shared between desktop and mobile
+  // Sidebar content
   const sidebarContent = (
-    <motion.div
-      className="w-60 space-y-5"
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: isCollapsed ? 0 : 1, x: isCollapsed ? -20 : 0 }}
-      transition={{ duration: 0.3, ease: 'easeInOut' }}
-      style={{ pointerEvents: isCollapsed ? 'none' : 'auto' }}
-    >
+    <div className="w-60 space-y-5">
       <SidebarHeader />
       <NewChatButton disabled={messages.length === 0} onClick={handleNewChat} />
       {isMounted && (
-        <>
-          <Endpoint />
-          {isEndpointActive ? (
-            <div className="flex items-center gap-2 rounded-xl bg-positive/10 px-3 py-2">
-              <div className="size-2 rounded-full bg-positive" />
-              <span className="text-xs font-medium text-positive">Connected</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2">
-              <div className="size-2 rounded-full bg-destructive" />
-              <span className="text-xs font-medium text-destructive">Disconnected</span>
-            </div>
-          )}
-        </>
+        isEndpointActive ? (
+          <div className="flex items-center gap-2 rounded-xl bg-positive/10 px-3 py-2">
+            <div className="size-2 rounded-full bg-positive" />
+            <span className="text-xs font-medium text-positive">Connected</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 rounded-xl bg-destructive/10 px-3 py-2">
+            <div className="size-2 rounded-full bg-destructive" />
+            <span className="text-xs font-medium text-destructive">Connecting...</span>
+          </div>
+        )
       )}
-    </motion.div>
+    </div>
   )
 
   return (
@@ -235,7 +97,15 @@ const Sidebar = ({ isMobileOpen, onMobileClose }: SidebarProps) => {
             <line x1="9" y1="3" x2="9" y2="21" />
           </svg>
         </motion.button>
-        {sidebarContent}
+        <motion.div
+          className="w-60 space-y-5"
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: isCollapsed ? 0 : 1, x: isCollapsed ? -20 : 0 }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          style={{ pointerEvents: isCollapsed ? 'none' : 'auto' }}
+        >
+          {sidebarContent}
+        </motion.div>
       </motion.aside>
 
       {/* Mobile sidebar overlay */}

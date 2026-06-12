@@ -7,7 +7,6 @@ import useAIResponseStream from './useAIResponseStream'
 const useAIChatStreamHandler = () => {
   const setMessages = useStore((state) => state.setMessages)
   const { addMessage, focusChatInput } = useChatActions()
-  const selectedEndpoint = useStore((state) => state.selectedEndpoint)
   const setIsStreaming = useStore((state) => state.setIsStreaming)
   const { streamResponse } = useAIResponseStream()
 
@@ -43,7 +42,7 @@ const useAIChatStreamHandler = () => {
       })
 
       try {
-        const apiUrl = `${selectedEndpoint}/api/chat`
+        const apiUrl = '/api/chat'
 
         await streamResponse({
           apiUrl,
@@ -89,7 +88,6 @@ const useAIChatStreamHandler = () => {
     [
       setMessages,
       addMessage,
-      selectedEndpoint,
       setIsStreaming,
       streamResponse,
       focusChatInput,
