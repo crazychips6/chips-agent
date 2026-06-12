@@ -1,11 +1,11 @@
-"""toolset 工具 — 运行时动态开关工具集
+"""toolset 工具 — 延迟加载工具集管理
 
-LLM 在对话中可自主启用/禁用工具集，无需重启：
+LLM 在对话中可启用/禁用工具集，启用后**当前轮即可使用**，永久有效直到禁用：
   toolset({"action": "enable", "name": "web"})
   toolset({"action": "disable", "name": "web"})
   toolset({"action": "list"})
 
-工具集被禁用后，其下的所有工具在后续轮次中不再出现在 LLM 的 tools 参数中。
+所有可用 toolset 名在 system prompt 中枚举，LLM 第一轮就知道有哪些可启用。
 """
 
 from __future__ import annotations
@@ -46,16 +46,15 @@ def _handle(args: dict[str, Any]) -> str:
                 desc = ts.get("description", "") if ts else ""
                 tools = resolve_toolset(ts_name)
                 lines.append(f"  [📌] {ts_name} — {desc}（永久常驻，{len(tools)} 个工具）")
-        if agent.hot_zone:
-            for ts_name in sorted(agent.hot_zone):
-                tt = agent.hot_zone[ts_name]
+        if agent.active_toolsets:
+            for ts_name in sorted(agent.active_toolsets):
                 ts = get_toolset(ts_name)
                 desc = ts.get("description", "") if ts else ""
-                lines.append(f"  [🔥] {ts_name} — {desc}（剩余 {tt} 轮）")
+                tools = resolve_toolset(ts_name)
+                lines.append(f"  [✓] {ts_name} — {desc}（{len(tools)} 个工具）")
         else:
-            lines.append("  （无热区工具，使用 toolset enable 激活）")
-        lines.append(f"\n可用工具总数: {len(agent.tool_names)}"
-                     f"  |  工具集: toolset list 查看详情  |  启用: toolset enable <名>")
+            lines.append("  （无已激活工具集，使用 toolset enable <名> 激活，当前轮即可使用）")
+        lines.append(f"\n可用工具总数: {len(agent.tool_names)}")
         return "\n".join(lines)
 
     if action == "enable":
@@ -63,23 +62,26 @@ def _handle(args: dict[str, Any]) -> str:
             return json.dumps({"error": "enable 需要 name 参数"})
         if not get_toolset(name):
             return json.dumps({"error": f"未知工具集: {name}"})
-        if name in agent.hot_zone:
-            return f"工具集 '{name}' 已在热区（剩余 {agent.hot_zone[name]} 轮）"
+        if name in agent.active_toolsets:
+            return f"工具集 '{name}' 已激活，无需重复操作"
         if name in getattr(agent, "permanent_toolsets", []):
             return f"工具集 '{name}' 已是永久常驻，无需激活"
-        # 加入 hot zone，TTL = 2 轮
-        agent.hot_zone[name] = 2
+        agent.active_toolsets.add(name)
+        # 当前轮立即生效：重新解析 tool_names，下一轮 LLM 调用即可使用
+        agent._resolve_tool_names()
         ts = get_toolset(name)
         desc = ts.get("description", "") if ts else ""
-        return f"已激活工具集 '{name}'（{desc}），将在 2 轮无使用后自动退出"
+        tools = resolve_toolset(name)
+        return f"已激活工具集 '{name}'（{desc}，{len(tools)} 个工具），当前轮即可使用"
 
     if action == "disable":
         if not name:
             return json.dumps({"error": "disable 需要 name 参数"})
-        if name in agent.hot_zone:
-            del agent.hot_zone[name]
-            return f"工具集 '{name}' 已从热区移除"
-        return f"工具集 '{name}' 不在热区中"
+        if name not in agent.active_toolsets:
+            return f"工具集 '{name}' 未激活"
+        agent.active_toolsets.discard(name)
+        agent._resolve_tool_names()
+        return f"已禁用工具集 '{name}'"
 
     return json.dumps({"error": f"未知操作: {action}（支持: enable, disable, list）"})
 
@@ -91,7 +93,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "toolset",
-            "description": "管理工具集：启用/禁用/查看。需要某个工具集但当前不可用时，先启用再使用。",
+            "description": "管理延迟加载工具集：启用/禁用/查看。可用工具集在 system prompt 中枚举。启用后**当前轮即可使用**，永久有效直到禁用。",
             "parameters": {
                 "type": "object",
                 "properties": {
