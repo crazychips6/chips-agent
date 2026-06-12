@@ -27,7 +27,6 @@ logger = logging.getLogger("chips.tui")
 
 _ACCENT = "\033[1;38;2;100;255;218m"  # cyan bold (chips accent)
 _DIM = "\033[38;2;100;100;120m"       # dim gray
-_FRIES = "\033[1;38;2;255;200;0m"     # golden yellow（薯条）
 _RST = "\033[0m"                       # reset
 
 # ── prompt_toolkit ANSI 渲染 ──
@@ -214,18 +213,18 @@ class TUI:
         if kw["context_file_count"]:
             footer_parts.append(f"Files: {kw['context_file_count']}")
 
-        # 薯条 ASCII art
-        _fries = [
-            "    ╔══╗ ╔══╗ ╔══╗",
-            "    ║  ║ ║  ║ ║  ║",
-            "    ╚╤═╝ ╚╤═╝ ╚╤═╝",
-            "     ╘╛   ╘╛   ╘╛",
+        # banner
+        _banner = [
+            "╔═╗ ╦ ╦ ╦ ╔═╗ ╔═╗",
+            "║   ╠═╣ ║ ╠═╣ ╚═╗",
+            "╚═╝ ╩ ╩ ╩ ╩ ╩ ╚═╝",
         ]
         label = " chips "
         _cprint(f"\n{_ACCENT}╭─{label}{'─' * (w - 5 - len(label))}╮{_RST}")
-        for _f in _fries:
-            self._box_line(f"{_FRIES}{_f}{_RST}", w)
-        self._box_line("", w)  # 空行分隔
+        self._box_line("", w)
+        for _b in _banner:
+            self._box_line(f"{_ACCENT}{_b}{_RST}", w)
+        self._box_line("", w)
         self._box_line(f"Model: {model}  |  Tools: {tool_count} ({toolset_str})", w)
         if footer_parts:
             self._box_line(f"{'  |  '.join(footer_parts)}", w, dim=True)
