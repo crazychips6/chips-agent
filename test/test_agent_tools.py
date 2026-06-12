@@ -36,9 +36,9 @@ class TestDelegateTask:
         agent = AIAgent(model="deepseek-chat", gateway=mock_gateway)
         agent.registry = registry
         # 默认 core toolset
-        from tool.toolsets import resolve_multiple_toolsets
-        agent.enabled_toolsets = ["core"]
-        agent.tool_names = set(resolve_multiple_toolsets(["core"])) & registry.tool_names
+        from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
+        agent.permanent_toolsets = ["core"]
+        agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(["core"]))) & registry.tool_names
         return agent
 
     def test_wire_and_delegate(self, mock_gateway):
@@ -232,7 +232,7 @@ class TestAgentRegistry:
         from tool.registry import registry
         agent = AIAgent(model="deepseek-chat", gateway=mock_gateway)
         agent.registry = registry
-        from tool.toolsets import resolve_multiple_toolsets
-        agent.enabled_toolsets = ["core"]
-        agent.tool_names = set(resolve_multiple_toolsets(["core"])) & registry.tool_names
+        from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
+        agent.permanent_toolsets = ["core"]
+        agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(["core"]))) & registry.tool_names
         return agent

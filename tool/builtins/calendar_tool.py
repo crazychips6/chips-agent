@@ -241,7 +241,7 @@ CALENDAR_SCHEMA = {
 
 registry.register(
     name="calendar",
-    toolset="core",
+    toolset="calendar",
     schema=CALENDAR_SCHEMA,
     handler=_handle,
 )

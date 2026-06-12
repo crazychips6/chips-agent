@@ -17,12 +17,16 @@ from __future__ import annotations
 from typing import Any
 
 
+# 始终暴露给 LLM 的核心工具名（不受 hot zone / permanent 影响）
+# 这些工具的 schema 每轮都在 tools 参数中，LLM 永远可以调用
+CORE_ALWAYS_ON = {"echo", "clarify", "todo", "toolset", "delegate_task", "orchestrate"}
+
 # ── 静态定义 ──
 
 TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "core": {
-        "description": "核心工具集（terminal + file + web + vision + skills + system + process）",
-        "includes": ["terminal", "file", "web", "vision", "skills", "geo", "system", "process"],
+        "description": "核心工具集（terminal + file，兼容 --toolset core）",
+        "includes": ["terminal", "file"],
     },
     "terminal": {"description": "终端命令执行"},
     "file":     {"description": "文件读写与搜索"},
@@ -31,12 +35,13 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "skills":   {"description": "技能系统管理"},
     "todo":     {"description": "任务规划与进度跟踪"},
     "clarify":  {"description": "向用户追问澄清"},
+    "calendar": {"description": "日程与日历管理"},
     "geo":      {"description": "基于 IP 的地理位置查询"},
     "system":   {"description": "系统信息查询（OS、CPU、内存、磁盘）"},
     "process":  {"description": "进程管理（列出/查看/终止）"},
     "all": {
         "description": "全部可用工具",
-        "includes": ["core"],
+        "includes": ["core", "web", "vision", "skills", "calendar", "geo", "system", "process"],
     },
 }
 
@@ -173,8 +178,19 @@ def is_toolset_available(name: str) -> bool:
 
 
 def build_availability_table() -> str:
-    """构建可用性 Markdown 表格（供 system prompt 注入）。"""
-    lines = ["| 工具集 | 状态 | 用途 |", "|--------|------|------|"]
+    """构建工具集可用性表格（供 system prompt 注入）。
+
+    包含两类信息：
+      1. 始终可用的核心工具
+      2. 可延迟加载的工具集及其下的工具名（LLM 可用 toolset enable 激活）
+    """
+    lines = []
+    # 始终可用
+    from tool.toolsets import CORE_ALWAYS_ON
+    lines.append("始终可用（无需激活）：" + ", ".join(sorted(CORE_ALWAYS_ON)))
+    lines.append("")
+    # 延迟加载工具集
+    lines.append("延迟加载工具集（使用 toolset enable <名> 激活，当前轮即可使用）：")
     for name in get_toolset_names():
         if name in ("all", "*"):
             continue
@@ -185,7 +201,9 @@ def build_availability_table() -> str:
         tools = resolve_toolset(name)
         if not tools:
             continue
-        status = "✓" if ok else "✗ 需配置"
+        if not ok:
+            continue
+        tool_list = ", ".join(tools)
         desc = ts.get("description", "")
-        lines.append(f"| {name} | {status} | {desc} |")
-    return "\n".join(lines) if len(lines) > 1 else ""
+        lines.append(f"  {name} ({desc}): {tool_list}")
+    return "\n".join(lines)

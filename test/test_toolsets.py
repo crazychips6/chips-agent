@@ -53,13 +53,11 @@ class TestResolveToolset:
         import tool.builtins  # noqa: F401
 
     def test_core_resolves_all_tools(self):
-        """core 展开后包含所有内置工具。"""
+        """core 展开后包含 terminal + file + core 自注册工具。"""
         result = resolve_toolset("core")
-        expected = {"echo", "terminal", "toolset",
+        expected = {"terminal",
                      "file_read", "file_write", "file_search",
-                     "web_fetch", "web_search",
-                     "screenshot",
-                     "skills_list", "skill_view", "skill_manage"}
+                     "echo", "toolset", "delegate_task", "orchestrate"}
         for tool in expected:
             assert tool in result, f"core 缺少 {tool}"
 

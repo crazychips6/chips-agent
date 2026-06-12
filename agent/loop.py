@@ -66,6 +66,10 @@ class AIAgent:
         self.tool_names: set[str] = set()
         # 启用的 toolset 名列表（动态开关用），由 cli.py 注入
         self.enabled_toolsets: list[str] = []
+        # ── Deferred Tools：LLM 启用后当前轮即可激活，永久可用直到 disable ──
+        self.active_toolsets: set[str] = set()
+        # 启动时 --toolset 指定的常驻 toolset
+        self.permanent_toolsets: list[str] = []
         # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
         self._extra_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
@@ -184,6 +188,19 @@ class AIAgent:
             skills_index=self.skills_index,
         )
 
+    # ── 工具解析（Deferred / Permanent / Core） ──
+
+    def _resolve_tool_names(self):
+        """从 active_toolsets + permanent_toolsets + CORE_ALWAYS_ON 重新计算 tool_names。"""
+        if not self.registry:
+            return
+        from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
+        core_tools = CORE_ALWAYS_ON & self.registry.tool_names
+        active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
+        perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
+        self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
+        self.tool_names &= self.registry.tool_names
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None) -> str:
@@ -234,11 +251,7 @@ class AIAgent:
                     "max_tokens": 4096,
                 }
 
-                # 从 enabled_toolsets 重新解析 tool_names（支持运行时动态开关）
-                if self.registry and self.enabled_toolsets:
-                    from tool.toolsets import resolve_multiple_toolsets
-                    base = resolve_multiple_toolsets(self.enabled_toolsets)
-                    self.tool_names = (set(base) | self._extra_tool_names) & self.registry.tool_names
+                self._resolve_tool_names()
 
                 if self.registry or self.memory_manager.providers:
                     tools = []
@@ -319,6 +332,13 @@ class AIAgent:
                             tool_result = self.registry.dispatch(name, args)
                             elapsed = int((time.time() - t0) * 1000)
                             logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
+                            # Deferred Tools: 如果 LLM 调用了 toolset 名而非工具名，给提示
+                            if tool_result.startswith('{"error": "unknown tool:'):
+                                from tool.toolsets import get_toolset
+                                if get_toolset(name):
+                                    tool_result = json.dumps({
+                                        "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
+                                    })
                         # 插件钩子：工具调用后
                         if self.plugin_manager:
                             tool_result = self.plugin_manager.dispatch_tool_call_post(name, tool_result)

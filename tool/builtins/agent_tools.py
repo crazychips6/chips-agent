@@ -127,10 +127,10 @@ def build_sub_agent(
         from tool.toolsets import resolve_multiple_toolsets
         resolved = resolve_multiple_toolsets(tools)
         sub.tool_names = set(resolved) & parent.registry.tool_names
-        sub.enabled_toolsets = list(tools)
+        sub.permanent_toolsets = list(tools)
     else:
         sub.tool_names = parent.tool_names
-        sub.enabled_toolsets = list(parent.enabled_toolsets)
+        sub.permanent_toolsets = list(parent.permanent_toolsets)
 
     if parent.context_files:
         sub.context_files = parent.context_files

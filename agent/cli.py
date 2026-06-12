@@ -17,7 +17,7 @@ from plugins import PluginManager
 from plugins.mcp import MCPManager
 from session.db import SessionDB
 from tool.registry import registry
-from tool.toolsets import resolve_multiple_toolsets, get_toolset, is_toolset_available
+from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets, get_toolset, is_toolset_available
 
 # 模块级 side-effect import：触发 builtins 目录下各工具的 registry.register() 自注册
 import tool.builtins  # noqa: F401
@@ -145,8 +145,10 @@ def main():
     # 临时手动 wiring，后续阶段会改为构造注入
     agent.registry = registry
     toolset_names = [n.strip() for n in args.toolset.split(",")]
-    agent.enabled_toolsets = list(toolset_names)
-    agent.tool_names = set(resolve_multiple_toolsets(toolset_names)) & registry.tool_names
+    # permanent_toolsets：--toolset 指定的常驻 toolset（不受 hot zone 影响）
+    agent.permanent_toolsets = list(toolset_names)
+    # 初始 tool_names = CORE_ALWAYS_ON ∪ permanent（hot zone 起始为空）
+    agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(toolset_names))) & registry.tool_names
 
     # 在 CWD 搜索上下文文件并注入 agent
     context_files = search_context_files()
