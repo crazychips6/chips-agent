@@ -39,10 +39,8 @@ class TestTUIStartup:
         )
 
     def test_startup_rich_mode(self):
-        """rich 模式（mock console 避免真实渲染）。"""
+        """启动面板统一用 ANSI 盒子风格（不抛异常即可）。"""
         tui = TUI()
-        tui._rich = True
-        tui._console = MagicMock()
         tui.startup(
             model="test-model",
             tool_count=10,
@@ -53,7 +51,6 @@ class TestTUIStartup:
             compress_status="on",
             context_file_count=1,
         )
-        tui._console.print.assert_called_once()
 
 
 class TestTUIChat:

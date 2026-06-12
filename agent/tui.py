@@ -3,7 +3,7 @@
 仿 Hermes CLI 风格：
   - prompt_toolkit ANSI 渲染（`_cprint`），避免 rich.Live 的线程问题
   - 行缓冲流式输出，unicode 边框符绘制对话气泡
-  - rich 仅用于：启动信息 Panel + 最终回复 Markdown 渲染
+  - rich 仅用于最终回复 Markdown 渲染（非流式模式）
 
 使用方式：
   tui = TUI()
@@ -97,21 +97,13 @@ class TUI:
         compress_status: str = "on",
         context_file_count: int = 0,
     ) -> None:
-        """显示启动信息面板。"""
-        if self._rich:
-            self._print_startup_panel(
-                model=model, tool_count=tool_count, toolset_names=toolset_names,
-                memory_status=memory_status, mcp_status=mcp_status,
-                skill_status=skill_status, compress_status=compress_status,
-                context_file_count=context_file_count,
-            )
-        else:
-            self._print_startup_plain(
-                model=model, tool_count=tool_count, toolset_names=toolset_names,
-                memory_status=memory_status, mcp_status=mcp_status,
-                skill_status=skill_status, compress_status=compress_status,
-                context_file_count=context_file_count,
-            )
+        """显示启动信息面板（ANSI 盒子风格）。"""
+        self._print_startup_panel(
+            model=model, tool_count=tool_count, toolset_names=toolset_names,
+            memory_status=memory_status, mcp_status=mcp_status,
+            skill_status=skill_status, compress_status=compress_status,
+            context_file_count=context_file_count,
+        )
 
     def chat(self, agent: AIAgent, text: str, max_iterations: int = 20) -> str:
         """对话单轮：展示用户消息 → 流式输出助理回复 → 返回完整文本。"""
@@ -190,45 +182,43 @@ class TUI:
             line, state.stream_buf = state.stream_buf.split("\n", 1)
             _cprint(f"    {line}")
 
-    # ── 启动 Panel ──
+    # ── 启动面板 ──
 
     def _print_startup_panel(self, **kw):
+        """ANSI 盒子绘制启动信息（仿 Hermes 风格）。"""
+        w = shutil.get_terminal_size().columns
         model = kw["model"]
         tool_count = kw["tool_count"]
         toolset_str = ", ".join(
             f"{n}✓" for n in kw["toolset_names"]
         ) if kw["toolset_names"] else "core"
-        lines = [
-            f"[bold]Model:[/] {model}",
-            f"[bold]Tools:[/] {tool_count} ({toolset_str})",
-        ]
-        parts = []
+        footer_parts = []
         if kw["memory_status"] != "off":
-            parts.append(f"Mem: {kw['memory_status']}")
+            footer_parts.append(f"Mem: {kw['memory_status']}")
         if kw["mcp_status"] != "off":
-            parts.append(f"MCP: {kw['mcp_status']}")
+            footer_parts.append(f"MCP: {kw['mcp_status']}")
         if kw["skill_status"] != "off":
-            parts.append(f"Skills: {kw['skill_status']}")
+            footer_parts.append(f"Skills: {kw['skill_status']}")
         if kw["compress_status"] != "off":
-            parts.append(f"Compress: {kw['compress_status']}")
+            footer_parts.append(f"Compress: {kw['compress_status']}")
         if kw["context_file_count"]:
-            parts.append(f"Files: {kw['context_file_count']}")
-        if parts:
-            lines.append(f"[dim]{'  |  '.join(parts)}[/]")
-        self._console.print(_RichPanel(
-            "\n".join(lines),
-            title="[bold cyan]chips[/]",
-            border_style="cyan",
-        ))
+            footer_parts.append(f"Files: {kw['context_file_count']}")
+
+        label = " chips "
+        _cprint(f"\n{_ACCENT}╭─{label}{'─' * (w - 5 - len(label))}╮{_RST}")
+        self._box_line(f"Model: {model}  |  Tools: {tool_count} ({toolset_str})", w)
+        if footer_parts:
+            self._box_line(f"{'  |  '.join(footer_parts)}", w, dim=True)
+        _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
+
+    def _box_line(self, text: str, width: int, dim: bool = False) -> None:
+        """打印盒子内的一行文字（带两侧边框）。"""
+        prefix = _DIM if dim else ""
+        content = f"  {text}"
+        pad = width - 4 - len(text)  # │ + space + text + space + │
+        _cprint(f"{_ACCENT}│{_RST} {prefix}{text}{_RST}{' ' * max(pad, 1)}{_ACCENT}│{_RST}")
 
     def _print_startup_plain(self, **kw):
+        """纯文本回退（无 prompt_toolkit 时）。"""
         print(f"chips v0.3.0 — model: {kw['model']}")
-        ts = ", ".join(kw["toolset_names"])
-        print(f"tools: {kw['tool_count']} ({ts})  |  memory: {kw['memory_status']}")
-        parts = []
-        if kw["mcp_status"] != "off":
-            parts.append(f"mcp: {kw['mcp_status']}")
-        if kw["skill_status"] != "off":
-            parts.append(f"skills: {kw['skill_status']}")
-        if parts:
-            print(" | ".join(parts))
+        print(f"tools: {kw['tool_count']} ({', '.join(kw['toolset_names'])})  |  memory: {kw['memory_status']}")
