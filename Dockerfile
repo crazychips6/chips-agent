@@ -6,9 +6,9 @@ WORKDIR /app
 # 复制前端项目
 COPY chips-agent-web/ /app/
 
-# 安装 pnpm 并构建
+# 安装 pnpm 并构建（使用国内镜像源）
 RUN corepack enable && corepack prepare pnpm@11 --activate
-RUN pnpm install
+RUN pnpm install --registry https://registry.npmmirror.com
 RUN pnpm build
 
 # 验证构建产物
