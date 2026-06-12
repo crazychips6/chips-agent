@@ -213,16 +213,18 @@ class TUI:
         if kw["context_file_count"]:
             footer_parts.append(f"Files: {kw['context_file_count']}")
 
-        # banner
+        # banner — 第一行嵌在顶边框上，2-3 行在框内
         _banner = [
-            "╔═╗ ╦ ╦ ╦ ╔═╗ ╔═╗",
-            "║   ╠═╣ ║ ╠═╣ ╚═╗",
-            "╚═╝ ╩ ╩ ╩ ╩ ╩ ╚═╝",
+            "╔═══╗ ╦ ╦ ╦ ╔═╗ ╦ ╔═╗",
+            "╚═╗ ║ ║ ║ ║ ╚═╗ ║ ║",
+            "╚═╝ ╩ ╚═╝ ╚═╝ ╩ ╚═╝",
         ]
-        label = " chips "
-        _cprint(f"\n{_ACCENT}╭─{label}{'─' * (w - 5 - len(label))}╮{_RST}")
-        self._box_line("", w)
-        for _b in _banner:
+        prefix = "╭─ "
+        sep = " ── "
+        b1_vis = _vis_len(_banner[0])
+        fill = w - len(prefix) - b1_vis - len(sep) - 1
+        _cprint(f"\n{_ACCENT}{prefix}{_banner[0]}{sep}{'─' * max(fill, 0)}╮{_RST}")
+        for _b in _banner[1:]:
             self._box_line(f"{_ACCENT}{_b}{_RST}", w)
         self._box_line("", w)
         self._box_line(f"Model: {model}  |  Tools: {tool_count} ({toolset_str})", w)
