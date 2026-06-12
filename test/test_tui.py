@@ -56,18 +56,18 @@ class TestTUIStartup:
 class TestTUIChat:
     """对话交互"""
 
-    def test_show_user_message_plain(self):
+    def test_show_user_plain(self):
         """纯文本模式展示用户消息。"""
         tui = TUI()
         tui._rich = False
         # 不抛异常
-        tui._show_user_message("你好")
+        tui._show_user("你好")
 
-    def test_show_user_message_rich(self):
+    def test_show_user_rich(self):
         """rich 模式下展示用户消息（使用 ANSI _cprint）。"""
         tui = TUI()
         # 不抛异常就算过
-        tui._show_user_message("你好")
+        tui._show_user("你好")
 
     def test_chat_non_streaming(self):
         """非流式模式（--no-stream）下的对话。"""

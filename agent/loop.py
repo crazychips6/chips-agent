@@ -203,7 +203,7 @@ class AIAgent:
 
     # ── 主循环 ──
 
-    def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None) -> str:
+    def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
         from tool.toolsets import build_availability_table
@@ -321,6 +321,10 @@ class AIAgent:
                         if self.plugin_manager:
                             args = self.plugin_manager.dispatch_tool_call_pre(name, args)
 
+                        # TUI 工具回调（调用前）
+                        if tool_callback:
+                            tool_callback(name, args, None)
+
                         # 工具执行判断， memory虽然是register发现，但是执行时被截断，只有tool被调用dispatch
                         if self.memory_manager.has_tool(name):
                             t0 = time.time()
@@ -339,6 +343,9 @@ class AIAgent:
                                     tool_result = json.dumps({
                                         "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
                                     })
+                        # TUI 工具回调（调用后）
+                        if tool_callback:
+                            tool_callback(name, args, tool_result)
                         # 插件钩子：工具调用后
                         if self.plugin_manager:
                             tool_result = self.plugin_manager.dispatch_tool_call_post(name, tool_result)

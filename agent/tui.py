@@ -1,20 +1,27 @@
 """TUI — 终端用户界面
 
-仿 Hermes CLI 风格：
-  - prompt_toolkit ANSI 渲染（`_cprint`），避免 rich.Live 的线程问题
-  - 行缓冲流式输出，unicode 边框符绘制对话气泡
-  - rich 仅用于最终回复 Markdown 渲染（非流式模式）
+对话展示风格（无边框，分区展示）：
+  ───────────────────────────────────
 
-使用方式：
-  tui = TUI()
-  tui.startup(model="...", tool_count=12, ...)
-  reply = tui.chat(agent, "你好")
+  你
+  上海天气
+
+  chips
+  好的，我来查一下...
+
+  🛠 web_search("上海 天气")
+     搜索结果: ...
+
+  chips
+  上海明天天气：晴转多云，28°C/22°C
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
@@ -23,222 +30,157 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("chips.tui")
 
-# ── ANSI 颜色常量 ──
+# ── ANSI 颜色 ──
 
-_ACCENT = "\033[1;38;2;100;255;218m"  # cyan bold (chips accent)
-_DIM = "\033[38;2;100;100;120m"       # dim gray
-_RST = "\033[0m"                       # reset
-
-# ── prompt_toolkit ANSI 渲染 ──
-
-try:
-    from prompt_toolkit import print_formatted_text as _pt_print
-    from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
-    _HAS_PT = True
-except ImportError:
-    _HAS_PT = False
-
-
-import re
+_ACCENT = "\033[1;38;2;100;255;218m"  # cyan bold
+_DIM = "\033[38;2;100;100;120m"        # dim gray
+_TOOL = "\033[38;2;255;200;100m"       # gold for tool calls
+_RST = "\033[0m"
 _ANSI_RE = re.compile(r'\033\[[0-9;]*m')
 
 
 def _vis_len(text: str) -> int:
-    """返回去除 ANSI 控制符后的可见字符长度。"""
     return len(_ANSI_RE.sub('', text))
 
 
 def _cprint(text: str) -> None:
-    """通过 prompt_toolkit 渲染 ANSI 彩色文本（兼容 patch_stdout）。"""
-    if _HAS_PT:
+    try:
+        from prompt_toolkit import print_formatted_text as _pt_print
+        from prompt_toolkit.formatted_text import ANSI as _PT_ANSI
         _pt_print(_PT_ANSI(text))
-    else:
+    except ImportError:
         print(text)
-
-
-# ── rich（可选） ──
-
-ENABLE_RICH = True
-try:
-    from rich.markdown import Markdown as _RichMarkdown
-    from rich.panel import Panel as _RichPanel
-except ImportError:
-    ENABLE_RICH = False
-
-
-# ── 流式输出状态 ──
 
 
 @dataclass
 class _StreamState:
-    """每次 chat() 调用的内部状态。"""
-    buffer: str = ""            # 完整累计内容
-    stream_buf: str = ""        # 行缓冲：未刷新的部分行
-    box_opened: bool = False    # 是否已打开回复框
-    started: bool = False       # 是否收到首个 chunk
-    final_markdown: str = ""    # 最终要渲染的 Markdown（仅在 rich 模式使用）
-
-
-# ── TUI 主类 ──
+    buffer: str = ""
+    started: bool = False
+    final_reply: str = ""
 
 
 class TUI:
-    """终端用户界面 —— 统一管理所有终端输出。"""
-
     def __init__(self):
-        self._rich = ENABLE_RICH
-        if self._rich:
-            from rich.console import Console
-            self._console = Console(highlight=False)
         self._state: _StreamState | None = None
-
-    # ── 对外接口 ──
-
-    def startup(
-        self,
-        *,
-        model: str,
-        tool_count: int,
-        toolset_names: list[str],
-        memory_status: str = "off",
-        mcp_status: str = "off",
-        skill_status: str = "off",
-        compress_status: str = "on",
-        context_file_count: int = 0,
-    ) -> None:
-        """显示启动信息面板（ANSI 盒子风格）。"""
-        self._print_startup_panel(
-            model=model, tool_count=tool_count, toolset_names=toolset_names,
-            memory_status=memory_status, mcp_status=mcp_status,
-            skill_status=skill_status, compress_status=compress_status,
-            context_file_count=context_file_count,
-        )
-
-    def chat(self, agent: AIAgent, text: str, max_iterations: int = 20) -> str:
-        """对话单轮：展示用户消息 → 流式输出助理回复 → 返回完整文本。"""
-        state = _StreamState()
-        self._state = state
-
-        self._show_user_message(text)
-
-        def _on_chunk(chunk: str):
-            if not state.started:
-                state.started = True
-                self._open_response_box(state)
-            state.buffer += chunk
-            self._stream_chunk(state, chunk)
-
         try:
-            reply = agent.run_conversation(
-                text,
-                max_iterations=max_iterations,
-                chunk_callback=_on_chunk,
-            )
-        finally:
-            if state.box_opened:
-                self._close_response_box(state)
-
-        final = reply or state.buffer
-        state.final_markdown = final
-        is_streaming = state.started and not reply
-
-        # 非流式模式：打印完整回复
-        if not is_streaming and final:
-            if self._rich:
-                self._console.print(_RichPanel(
-                    _RichMarkdown(final),
-                    title="🤖 chips",
-                    border_style="green",
-                ))
-            else:
-                print(final)
-
-        self._state = None
-        return final
-
-    # ── 用户消息展示 ──
-
-    def _show_user_message(self, text: str) -> None:
-        """在对话流中展示用户消息。"""
-        w = shutil.get_terminal_size().columns
-        _cprint(f"\n{_DIM}{'─' * w}{_RST}")
-        _cprint(f"{_ACCENT}●{_RST} {text}")
-
-    # ── 回复框 ──
-
-    def _open_response_box(self, state: _StreamState) -> None:
-        """打开回复框的顶边框。"""
-        w = shutil.get_terminal_size().columns
-        label = "🤖 chips"
-        fill = w - 2 - len(label)
-        _cprint(f"\n{_ACCENT}╭─{label}{'─' * max(fill - 1, 0)}╮{_RST}")
-        state.box_opened = True
-
-    def _close_response_box(self, state: _StreamState) -> None:
-        """关闭回复框的底边框 + 刷新行缓冲。"""
-        if state.stream_buf:
-            _cprint(f"    {state.stream_buf}")
-            state.stream_buf = ""
-        w = shutil.get_terminal_size().columns
-        _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
-
-    # ── 流式输出（行缓冲） ──
-
-    def _stream_chunk(self, state: _StreamState, chunk: str) -> None:
-        """行缓冲流式输出：将文本按行分割，完整行立即刷新。"""
-        state.stream_buf += chunk
-        while "\n" in state.stream_buf:
-            line, state.stream_buf = state.stream_buf.split("\n", 1)
-            _cprint(f"    {line}")
+            from rich.console import Console
+            from rich.markdown import Markdown as _RichMarkdown
+            from rich.panel import Panel as _RichPanel
+            self._rich = True
+            self._console = Console(highlight=False)
+            self._RichMarkdown = _RichMarkdown
+            self._RichPanel = _RichPanel
+        except ImportError:
+            self._rich = False
 
     # ── 启动面板 ──
 
-    def _print_startup_panel(self, **kw):
-        """ANSI 盒子绘制启动信息（仿 Hermes 风格）。"""
-        w = shutil.get_terminal_size().columns
-        model = kw["model"]
-        tool_count = kw["tool_count"]
-        toolset_str = ", ".join(
-            f"{n}✓" for n in kw["toolset_names"]
-        ) if kw["toolset_names"] else "core"
-        footer_parts = []
-        if kw["memory_status"] != "off":
-            footer_parts.append(f"Mem: {kw['memory_status']}")
-        if kw["mcp_status"] != "off":
-            footer_parts.append(f"MCP: {kw['mcp_status']}")
-        if kw["skill_status"] != "off":
-            footer_parts.append(f"Skills: {kw['skill_status']}")
-        if kw["compress_status"] != "off":
-            footer_parts.append(f"Compress: {kw['compress_status']}")
-        if kw["context_file_count"]:
-            footer_parts.append(f"Files: {kw['context_file_count']}")
-
-        # banner — 第一行嵌在顶边框上，2-3 行在框内
+    def startup(self, *, model: str, tool_count: int, toolset_names: list[str],
+                memory_status: str = "off", mcp_status: str = "off",
+                skill_status: str = "off", compress_status: str = "on",
+                context_file_count: int = 0) -> None:
         _banner = [
             "╔═╗ ╦ ╦ ╦ ╔═╗ ╔═╗",
             "║   ╠═╣ ║ ╠═╣ ╚═╗",
             "╚═╝ ╩ ╩ ╩ ╩   ╚═╝",
         ]
+        w = shutil.get_terminal_size().columns
+
+        # 顶边框（带 logo）
         prefix = "╭─ "
         b1_vis = _vis_len(_banner[0])
-        fill = w - len(prefix) - b1_vis - 1  # ╮
+        fill = w - len(prefix) - b1_vis - 1
         _cprint(f"\n{_ACCENT}{prefix}{_banner[0]}{'─' * max(fill, 0)}╮{_RST}")
         for _b in _banner[1:]:
-            self._box_line(f"{_ACCENT}{_b}{_RST}", w)
+            self._box_line(_b, w)
         self._box_line("", w)
-        self._box_line(f"Model: {model}  |  Tools: {tool_count} ({toolset_str})", w)
-        if footer_parts:
-            self._box_line(f"{'  |  '.join(footer_parts)}", w, dim=True)
+
+        # 信息行
+        ts = ", ".join(f"{n}✓" for n in toolset_names) if toolset_names else "core"
+        self._box_line(f"Model: {model}  |  Tools: {tool_count} ({ts})", w)
+        parts = []
+        if memory_status != "off":
+            parts.append(f"Mem: {memory_status}")
+        if mcp_status != "off":
+            parts.append(f"MCP: {mcp_status}")
+        if skill_status != "off":
+            parts.append(f"Skills: {skill_status}")
+        if compress_status != "off":
+            parts.append(f"Compress: {compress_status}")
+        if context_file_count:
+            parts.append(f"Files: {context_file_count}")
+        if parts:
+            self._box_line("  |  ".join(parts), w, dim=True)
         _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")
 
-    def _box_line(self, text: str, width: int, dim: bool = False) -> None:
-        """打印盒子内的一行文字（带两侧边框），自动处理 ANSI 控制符长度。"""
+    def _box_line(self, text: str, w: int, dim: bool = False) -> None:
         prefix = _DIM if dim else ""
         visible = _vis_len(text)
-        pad = width - 3 - visible  # │ + space + text + │
+        pad = w - 3 - visible
         _cprint(f"{_ACCENT}│{_RST} {prefix}{text}{_RST}{' ' * max(pad, 1)}{_ACCENT}│{_RST}")
 
-    def _print_startup_plain(self, **kw):
-        """纯文本回退（无 prompt_toolkit 时）。"""
-        print(f"chips v0.3.0 — model: {kw['model']}")
-        print(f"tools: {kw['tool_count']} ({', '.join(kw['toolset_names'])})  |  memory: {kw['memory_status']}")
+    # ── 对话 ──
+
+    def chat(self, agent: AIAgent, text: str, max_iterations: int = 20) -> str:
+        state = _StreamState()
+        self._state = state
+
+        self._show_user(text)
+
+        def _on_chunk(chunk: str):
+            if not state.started:
+                state.started = True
+                _cprint(f"\n{_ACCENT} chips{_RST}")
+                sys.stdout.write("  ")
+            state.buffer += chunk
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+
+        def _on_tool(name: str, args: dict, result: str | None):
+            if result is None:
+                # 工具开始调用
+                args_preview = json_preview(args)
+                _cprint(f"\n{_TOOL}  🛠 {name}({args_preview}){_RST}")
+            else:
+                # 工具返回结果（精简显示）
+                preview = result[:200].replace("\n", " ")
+                _cprint(f"{_DIM}     {preview}{_RST}")
+
+        try:
+            reply = agent.run_conversation(
+                text, max_iterations=max_iterations,
+                chunk_callback=_on_chunk,
+                tool_callback=_on_tool,
+            )
+        finally:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        final = reply or state.buffer
+        state.final_reply = final
+
+        if not state.started and final:
+            # 非流式模式
+            _cprint(f"\n{_ACCENT} chips{_RST}")
+            _cprint(f" {final}")
+
+        self._state = None
+        return final
+
+    # ── 用户消息 ──
+
+    def _show_user(self, text: str) -> None:
+        w = shutil.get_terminal_size().columns
+        _cprint(f"\n{_DIM}{'─' * w}{_RST}")
+        _cprint(f"  {_ACCENT}你{_RST}")
+        _cprint(f"  {text}")
+
+def json_preview(args: dict) -> str:
+    """精简显示工具参数，避免过长的字符串。"""
+    parts = []
+    for k, v in args.items():
+        s = str(v)
+        if len(s) > 40:
+            s = s[:37] + "..."
+        parts.append(f"{k}={s}")
+    return ", ".join(parts)
