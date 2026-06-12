@@ -298,14 +298,12 @@ class TUI:
             if not state.started:
                 state.started = True
                 sys.stdout.write("\n")
-                self._focus.begin(0, f" {_ACCENT}chips{_RST}\n")
+                # chips 标签直接静态输出，不用 focus tracker（避免流式行数追踪不准）
+                sys.stdout.write(f" {_ACCENT}○ chips{_RST}\n")
             state.buffer += chunk
             # 流式写入，无缓冲直接输出（不支持折行，以保留流式感）
             sys.stdout.write(chunk)
             sys.stdout.flush()
-            # 跟踪实际行数，确保 _focus.end() 能准确定位 ○ 行
-            if self._focus._stack:
-                self._focus._stack[-1].height += chunk.count('\n')
 
         def _on_tool(name: str, args: dict, result: str | None):
             if result is None:
@@ -330,8 +328,6 @@ class TUI:
             sys.stdout.write("\n")
             sys.stdout.flush()
 
-        # 关闭 chips 聚焦
-        self._focus.end()
         sys.stdout.write("\n")  # 与下一个输入之间保留空行
 
         final = reply or state.buffer
@@ -339,11 +335,10 @@ class TUI:
 
         if not state.started and final:
             # 非流式模式 — 补打 chips 段落
-            self._focus.begin(0, f" {_ACCENT}chips{_RST}")
-            sys.stdout.write("\n")
-            self._focus.writeln(f" {final}")
-            self._focus.end()
-            sys.stdout.write("\n")
+            sys.stdout.write(f" {_ACCENT}● chips{_RST}\n")
+            for line_text in _wrap_text(final.strip(), indent=2).split("\n"):
+                print(line_text)
+            print()
 
         # 安全清理
         self._focus.clear()
