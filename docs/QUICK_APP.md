@@ -26,7 +26,7 @@
 | Agent 怎么用 | 每次重新敲命令摸索参数 | 通过 schema 自动生成正确调用 |
 | Agent 下次还记得吗 | ❌ 不记得，下次再编一次 | ✅ 存着，直接用 |
 | 谁在调试 | **用户** | **Agent**（自我验证，用户不感知） |
-| 能否独立运行 | ✅（CLI 入口） | ✅ |
+| 能否独立运行 | ✅（CLI 入口） | ❌（依赖 chips 运行时） |
 
 ### 和内置工具的关系
 
@@ -325,6 +325,7 @@ def handler(args: dict) -> str:
     return f"已生成 {output_path}"
 
 if __name__ == "__main__":
+    # 子进程入口，供 QuickAppManager.run() 内部调用
     import json, sys
     print(handler(json.loads(sys.argv[1])))
 ```
@@ -497,7 +498,7 @@ Agent 视角：
 
 - **known-good 索引**：预置已知 CLI 工具和 pip 包的描述 + 调用方式
 - **代码生成 prompt**：包含检索优先级规则（已知工具 → known-good 包 → GitHub → 自己写）
-- **包装模板**：固定 handler 签名 + `subprocess.run()` 调用模式 + `if __name__ == "__main__"` CLI 入口
+- **包装模板**：固定 handler 签名 + `subprocess.run()` 调用模式 + `if __name__ == "__main__"` 子进程入口
 - 模板中写死 `toolset="quick_apps"`，LLM 无权修改
 
 #### 内置工具
