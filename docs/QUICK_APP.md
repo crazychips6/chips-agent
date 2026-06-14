@@ -161,7 +161,7 @@ CLI（不支持）
 
 `PluginContext.register_tool()` 的 handler 在主进程跑，快应用必须走子进程隔离，所以需要一个 Manager 在注册时自动包装 spawn 逻辑。
 
-### Manager 职责
+Manager 职责
 
 ```
 QuickAppManager
@@ -169,8 +169,26 @@ QuickAppManager
 ├── load_all() → list[QuickApp]      # 启动时扫描目录，import 并注册
 ├── run(name, args) → str            # spawn 子进程执行
 ├── delete(name) → None              # 删文件 + deregister
-└── list() → list[QuickApp]          # 列出所有快应用
+├── list() → list[QuickApp]          # 列出所有快应用
+└── get_log(name) → list[LogEntry]   # 查看执行日志
 ```
+
+### 统一执行日志
+
+所有快应用的每次调用都会记录一条结构化日志，用户可从 Dashboard 按时间倒序查看：
+
+```
+14:02  wechat_crawler  "科技日报"    3 篇   2.3s  ✅
+14:05  wechat_crawler  "量子位"      5 篇   3.1s  ✅
+14:10  video_to_gif    "demo.mp4"         12s    ❌ ffmpeg 未安装
+```
+
+每条日志包含：
+- 时间、工具名、参数摘要、执行时长
+- 结果状态（成功/失败）
+- 失败原因（用户可读，不是技术报错）
+
+日志的价值不在技术层面（这只是一个简单的结构化存储），而在用户层面——用户不碰代码，但他有权知道工具干了什么。失败要告诉他为什么、怎么解决。成功案例可以让用户一键重跑。
 
 ### 和 PluginManager 的对比
 
