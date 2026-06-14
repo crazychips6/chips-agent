@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -91,6 +92,22 @@ class AIAgent:
         self.max_context_chars: int = 100_000
         # 冷冻 system prompt 缓存 —— 首次 run_conversation 时构建，全程复用
         self._frozen_base: str | None = None
+
+        # ── 中断管理 ──
+        # 使用 threading.Event（而非 bool），为未来多线程场景预留
+        self._interrupt_requested = threading.Event()
+
+    def interrupt(self):
+        """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
+        self._interrupt_requested.set()
+
+    def _is_interrupted(self) -> bool:
+        """检查是否收到中断请求。"""
+        return self._interrupt_requested.is_set()
+
+    def clear_interrupt(self):
+        """清除中断请求。"""
+        self._interrupt_requested.clear()
 
     # ── 消息构建 ──
 
@@ -204,6 +221,7 @@ class AIAgent:
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
+        self.clear_interrupt()  # 清除上一轮可能残留的中断信号
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
         from tool.toolsets import build_availability_table
@@ -235,6 +253,11 @@ class AIAgent:
         # ReAct 循环
         try:
             for iteration in range(max_iterations):
+                # 中断检查 ①：每次迭代开始
+                if self._is_interrupted():
+                    logger.info("interrupt_requested iteration=%d", iteration)
+                    break
+
                 # 智能压缩（摘要保留信息，有 context engine 时优先）
                 if self.context_engine and self.context_engine.should_compress():
                     self.messages = self.context_engine.compress(self.messages)
@@ -269,6 +292,11 @@ class AIAgent:
                         existing_names.add(name)
                     if tools:
                         kwargs["tools"] = tools
+
+                # 中断检查 ②：在调用 LLM 之前，避免浪费 tokens
+                if self._is_interrupted():
+                    logger.info("interrupt_requested before_llm iteration=%d", iteration)
+                    break
 
                 # LLM 调用（通过 gateway，内部处理 retry/streaming）
                 if self.stream:
@@ -362,6 +390,10 @@ class AIAgent:
                         # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
                         self._maybe_inject_image(tool_result)
                     self._save_pending()
+                    # 中断检查 ③：工具执行批后，在此轮结束前检查
+                    if self._is_interrupted():
+                        logger.info("interrupt_requested after_tools iteration=%d", iteration)
+                        break
                 else:
                     content = result.content or ""
                     if self.plugin_manager:
@@ -375,8 +407,12 @@ class AIAgent:
                         return content
                     return ""
 
-            # 达到最大迭代次数
+            # 中断 或 达到最大迭代次数
             self._save_pending()
+            if self._is_interrupted():
+                if last_text_reply:
+                    return f"{last_text_reply}\n\n---\n⚠ 对话已被中断"
+                return "⚠ 对话已被中断"
             if last_text_reply:
                 return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
             return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"

@@ -2,6 +2,9 @@
 
 import argparse
 import os
+import signal
+import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -303,6 +306,20 @@ def main():
     from agent.repl_prompt_toolkit import PromptToolkitInputBackend
 
     cmd_reg = CommandRegistry()
+
+    # ── SIGINT 处理器（双击 Ctrl+C 强制退出） ──
+    _last_sigint = 0.0
+    def _sigint_handler(signum, frame):
+        nonlocal _last_sigint
+        now = time.time()
+        if now - _last_sigint < 2.0:
+            print("\n[强制退出]")
+            sys.exit(1)
+        _last_sigint = now
+        agent.interrupt()
+        print("\n[正在中断...]")
+
+    signal.signal(signal.SIGINT, _sigint_handler)
 
     loop = ReplLoop(
         agent=agent,
