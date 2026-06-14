@@ -321,6 +321,30 @@ def main():
 
     signal.signal(signal.SIGINT, _sigint_handler)
 
+    # ── /clear — 清除对话历史 ──
+    def _cmd_clear(args: list[str]) -> str | None:
+        agent.messages.clear()
+        agent._saved_count = 0
+        agent._tool_call_history.clear()
+        if agent.context_engine:
+            agent.context_engine.on_session_reset()
+        return "✅ 对话历史已清除"
+    cmd_reg.register("clear", _cmd_clear, "清除当前对话历史")
+
+    # ── /compact — 手动压缩对话上下文 ──
+    def _cmd_compact(args: list[str]) -> str | None:
+        if not agent.context_engine:
+            return "⚠ 未启用上下文压缩引擎（启动时加 --no-compress 了吗？）"
+        if len(agent.messages) < 4:
+            return "对话太短，无需压缩"
+        before = len(agent.messages)
+        before_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        agent.messages = agent.context_engine.compress(agent.messages)
+        after = len(agent.messages)
+        after_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        return f"✅ 已压缩：{before} → {after} 条消息（{before_chars} → {after_chars} 字符）"
+    cmd_reg.register("compact", _cmd_compact, "手动压缩对话上下文（减少 token 占用）")
+
     loop = ReplLoop(
         agent=agent,
         input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
