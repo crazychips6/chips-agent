@@ -243,7 +243,8 @@ class TUI:
     def startup(self, *, model: str, tool_count: int, toolset_names: list[str],
                 memory_status: str = "off", mcp_status: str = "off",
                 skill_status: str = "off", compress_status: str = "on",
-                context_file_count: int = 0) -> None:
+                context_file_count: int = 0,
+                qa_count: int = 0) -> None:
         _banner = [
             "╔═╗ ╦ ╦ ╦ ╔═╗ ╔═╗ ",
             " ║   ╠═╣ ║ ╠═╣ ╚═╗",
@@ -274,6 +275,8 @@ class TUI:
             parts.append(f"Compress: {compress_status}")
         if context_file_count:
             parts.append(f"Files: {context_file_count}")
+        if qa_count:
+            parts.append(f"QuickApps: {qa_count}")
         if parts:
             self._box_line("  |  ".join(parts), w, dim=True)
         _cprint(f"{_ACCENT}╰{'─' * (w - 2)}╯{_RST}")

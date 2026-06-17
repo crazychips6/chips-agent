@@ -1,20 +1,26 @@
+'use client'
+
 import { useCallback } from 'react'
 import { useStore } from '../store'
+import { useAuthStore } from '@/store/auth'
 import { type ChatMessage } from '@/types/os'
 
 const useChatActions = () => {
   const { chatInputRef } = useStore()
   const setMessages = useStore((state) => state.setMessages)
   const setIsEndpointActive = useStore((state) => state.setIsEndpointActive)
+  const getAuthHeader = useAuthStore((state) => state.getAuthHeader)
 
   const getStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/health')
+      const res = await fetch('/api/health', {
+        headers: { ...getAuthHeader() },
+      })
       return res.ok
     } catch {
       return false
     }
-  }, [])
+  }, [getAuthHeader])
 
   const clearChat = useCallback(() => {
     setMessages([])
@@ -30,7 +36,7 @@ const useChatActions = () => {
     (message: ChatMessage) => {
       setMessages((prevMessages) => [...prevMessages, message])
     },
-    [setMessages]
+    [setMessages],
   )
 
   const initialize = useCallback(async () => {

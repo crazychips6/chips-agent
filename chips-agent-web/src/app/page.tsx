@@ -1,10 +1,18 @@
 'use client'
 import Sidebar from '@/components/chat/Sidebar/Sidebar'
 import { ChatArea } from '@/components/chat/ChatArea'
+import LoginPage from '@/components/auth/LoginPage'
+import { useAuthStore } from '@/store/auth'
 import { Suspense, useState } from 'react'
 
 function HomeContent() {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+  const { isAuthenticated, token } = useAuthStore()
+
+  // 未登录时显示登录界面
+  if (!isAuthenticated || !token) {
+    return <LoginPage />
+  }
 
   return (
     <div className="flex h-screen">

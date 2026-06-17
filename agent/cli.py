@@ -212,6 +212,14 @@ def main():
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
     wire_todo_store(TodoStore())
 
+    # ── QuickApp 系统初始化 ──
+    from tool.builtins.quick_app_tools import wire_agent as wire_quick_app_agent
+    wire_quick_app_agent(agent)
+    from quick_app.manager import init_manager as init_quick_app_manager
+    qa_manager = init_quick_app_manager()
+    qa_count = len(qa_manager.list())
+    agent.quick_app_manager = qa_manager
+
     # ── 环境层初始化（terminal_tool 自己读 CHIPS_ENV 懒加载） ──
     os.environ["CHIPS_ENV"] = args.env
     if args.env == "docker":
@@ -290,6 +298,7 @@ def main():
         skill_status=skill_status,
         compress_status=compress_status,
         context_file_count=len(agent.context_files),
+        qa_count=qa_count,
     )
 
     if args.message:

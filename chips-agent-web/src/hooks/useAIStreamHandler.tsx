@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 
+import { useAuthStore } from '@/store/auth'
 import useChatActions from '@/hooks/useChatActions'
 import { useStore } from '../store'
 import useAIResponseStream from './useAIResponseStream'
@@ -9,6 +10,8 @@ const useAIChatStreamHandler = () => {
   const { addMessage, focusChatInput } = useChatActions()
   const setIsStreaming = useStore((state) => state.setIsStreaming)
   const { streamResponse } = useAIResponseStream()
+
+  const getAuthHeader = useAuthStore((state) => state.getAuthHeader)
 
   const handleStreamResponse = useCallback(
     async (input: string) => {
@@ -46,6 +49,7 @@ const useAIChatStreamHandler = () => {
 
         await streamResponse({
           apiUrl,
+          headers: { ...getAuthHeader() },
           body: { message: input },
           onToken: (token: string) => {
             setMessages((prevMessages) => {
@@ -91,6 +95,7 @@ const useAIChatStreamHandler = () => {
       setIsStreaming,
       streamResponse,
       focusChatInput,
+      getAuthHeader,
     ]
   )
 

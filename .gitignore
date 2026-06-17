@@ -6,6 +6,7 @@ __pycache__/
 # 运行时数据
 .chips/
 .memory/
+web/static/
 
 # SessionDB 测试遗留
 :memory:

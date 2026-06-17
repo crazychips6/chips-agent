@@ -39,9 +39,10 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "geo":      {"description": "基于 IP 的地理位置查询"},
     "system":   {"description": "系统信息查询（OS、CPU、内存、磁盘）"},
     "process":  {"description": "进程管理（列出/查看/终止）"},
+    "quick_apps": {"description": "QuickApp 快应用创建与管理（get_quick_app_draft / create_app / list_apps / delete_app）"},
     "all": {
         "description": "全部可用工具",
-        "includes": ["core", "web", "vision", "skills", "calendar", "geo", "system", "process"],
+        "includes": ["core", "web", "vision", "skills", "calendar", "geo", "system", "process", "quick_apps"],
     },
 }
 

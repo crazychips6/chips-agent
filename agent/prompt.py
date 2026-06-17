@@ -117,6 +117,13 @@ CONVENTIONS_PROMPT = """## 回复规范
 - 一次只调用一个工具，等待结果后再决定下一步
 - 任务完成后，用中文给出简洁总结"""
 
+QUICKAPP_PROMPT = """## 快应用创建规则
+- 当用户想要一个「自动化工具」时，优先考虑创建快应用
+- 创建前必须先调 get_quick_app_draft 获取草案卡片
+- 严禁跳过 get_quick_app_draft 直接调 create_app
+- 草案卡片的 source 字段必须来自工具返回结果，不可自行捏造
+- 用户确认草案后再调 create_app 完成创建"""
+
 
 # ── PromptBuilder ──
 
@@ -166,6 +173,9 @@ class PromptBuilder:
 
         # Layer 5 — 调用约定（始终存在）
         layers.append(("调用约定", CONVENTIONS_PROMPT))
+
+        # Layer 6 — 快应用规则（始终存在）
+        layers.append(("快应用规则", QUICKAPP_PROMPT))
 
         if self.verbose and not self._has_verbose_printed:
             self._dump_layers(layers)
@@ -217,6 +227,7 @@ class PromptBuilder:
                 parts.append(f"文件：{rel}\n{content}")
             layers.append(("项目上下文", "\n\n---\n\n".join(parts)))
         layers.append(("调用约定", CONVENTIONS_PROMPT))
+        layers.append(("快应用规则", QUICKAPP_PROMPT))
         if self.verbose and not self._has_verbose_printed:
             self._dump_layers(layers)
             self._has_verbose_printed = True
