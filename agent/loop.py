@@ -92,6 +92,8 @@ class AIAgent:
         self.max_context_chars: int = 100_000
         # 冷冻 system prompt 缓存 —— 首次 run_conversation 时构建，全程复用
         self._frozen_base: str | None = None
+        # 对话轮次计数器（跨 run_conversation 调用递增）
+        self.turn_count: int = 0
 
         # ── 中断管理 ──
         # 使用 threading.Event（而非 bool），为未来多线程场景预留
@@ -221,6 +223,10 @@ class AIAgent:
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
+        self.turn_count += 1
+        # 更新日志轮次，后续所有 log record 将携带 turn_number
+        from agent.logger import set_turn_number
+        set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
@@ -301,10 +307,16 @@ class AIAgent:
                 # LLM 调用（通过 gateway，内部处理 retry/streaming）
                 if self.stream:
                     _on_chunk = chunk_callback or (lambda c: print(c, end="", flush=True))
+                    _buf: list[str] = []  # 仅用于事后安全检查，不影响实时输出
+
+                    def _collecting_chunk(text: str):
+                        _buf.append(text)
+                        _on_chunk(text)  # 立即输出，不缓冲
+
                     result = self.gateway.chat_stream(
                         messages=api_messages, model=self.model,
                         max_tokens=4096, tools=tools if tools else None,
-                        on_chunk=_on_chunk,
+                        on_chunk=_collecting_chunk,
                     )
                     # 纯文本流式输出结束后换行
                     if not result.tool_calls:
@@ -398,6 +410,16 @@ class AIAgent:
                     content = result.content or ""
                     if self.plugin_manager:
                         content = self.plugin_manager.dispatch_response(content)
+                    # 输出护栏（事后检查）：不影响实时流式输出
+                    from agent.prompt import check_output_safety
+                    safety_hit = check_output_safety(content)
+                    if safety_hit:
+                        logger.warning("output_safety_blocked pattern=%s content_truncated=%s", safety_hit, content[:200])
+                        # 非流式模式：替换最终返回内容和消息历史
+                        # 流式模式：内容已实时输出，仅记录日志，不篡改历史
+                        if not self.stream:
+                            result.content = f"⚠ 回复已被过滤（命中输出护栏：[{safety_hit}]）"
+                            content = result.content
                     self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
                     last_text_reply = content

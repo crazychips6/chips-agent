@@ -121,6 +121,11 @@ def optional_user(request: Request) -> str | None:
 _agent = None
 
 
+def _get_agent_or_none():
+    """返回 _agent 但不初始化（用于 health/metrics 只读访问）。"""
+    return _agent
+
+
 def get_agent():
     global _agent
     if _agent is None:
@@ -235,7 +240,67 @@ async def shutdown():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    """健康检查：返回各子系统状态。"""
+    status = {"status": "ok", "subsystems": {}}
+
+    # Agent 状态
+    agent = _get_agent_or_none()
+    if agent is None:
+        status["subsystems"]["agent"] = "not_initialized"
+    else:
+        agent_ok = True
+        agent_info = {
+            "model": agent.model,
+            "tools": len(agent.tool_names),
+            "session_id": agent.session_id,
+            "messages": len(agent.messages),
+        }
+        status["subsystems"]["agent"] = agent_info
+
+    # Memory 状态
+    if agent and agent.memory_manager:
+        providers = [p.name for p in agent.memory_manager.providers]
+        status["subsystems"]["memory"] = {
+            "providers": providers,
+            "active": len(providers),
+        }
+    else:
+        status["subsystems"]["memory"] = "disabled"
+
+    # Session DB 状态
+    if agent and agent.session_db:
+        try:
+            count = agent.session_db.summary_stats().get("total_sessions", -1)
+            status["subsystems"]["session_db"] = {"sessions": count, "status": "ok"}
+        except Exception as e:
+            status["subsystems"]["session_db"] = {"status": "error", "detail": str(e)}
+    else:
+        status["subsystems"]["session_db"] = "disabled"
+
+    # 网关 / API 状态
+    if agent and hasattr(agent, "gateway"):
+        gateway = getattr(agent, "gateway", None)
+        inner = getattr(gateway, "_inner", None)
+        provider = type(inner).__name__ if inner else "unknown"
+        status["subsystems"]["gateway"] = {"provider": provider, "status": "ok"}
+
+    return status
+
+
+@app.get("/api/metrics")
+async def metrics():
+    """返回 Prometheus 风格的聚合指标。"""
+    agent = _get_agent_or_none()
+    if agent is None:
+        return {"status": "not_initialized"}
+
+    gateway = getattr(agent, "gateway", None)
+    if gateway is None or not hasattr(gateway, "get_metrics"):
+        return {"status": "unavailable", "reason": "gateway not instrumented"}
+
+    result = gateway.get_metrics()
+    result["status"] = "ok"
+    return result
 
 
 @app.post("/api/login", response_model=TokenResponse)

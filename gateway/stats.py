@@ -57,30 +57,44 @@ class UsageRecorder(ModelGateway):
         self.total_completion_tokens = 0
         self.total_cost = 0.0
         self.call_count = 0
+        self.error_count = 0
         self.calls: list[dict[str, Any]] = []
+        self.errors: list[dict[str, Any]] = []
 
     # ── ModelGateway ──
 
     def chat(self, messages: list[dict[str, Any]], model: str = "",
              **kwargs: Any) -> ChatResult:
         t0 = time.monotonic()
-        result = self._inner.chat(messages, model=model, **kwargs)
-        self._record(model, result.usage, int((time.monotonic() - t0) * 1000))
-        return result
+        try:
+            result = self._inner.chat(messages, model=model, **kwargs)
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            self._record(model, result.usage, latency_ms, status="ok")
+            return result
+        except Exception as e:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            self._record_error(model, latency_ms, e)
+            raise
 
     def chat_stream(self, messages: list[dict[str, Any]], model: str = "",
                     *, on_chunk: Callable[[str], None] | None = None,
                     **kwargs: Any) -> ChatResult:
         t0 = time.monotonic()
-        result = self._inner.chat_stream(messages, model=model,
-                                         on_chunk=on_chunk, **kwargs)
-        self._record(model, result.usage, int((time.monotonic() - t0) * 1000))
-        return result
+        try:
+            result = self._inner.chat_stream(messages, model=model,
+                                             on_chunk=on_chunk, **kwargs)
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            self._record(model, result.usage, latency_ms, status="ok")
+            return result
+        except Exception as e:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            self._record_error(model, latency_ms, e)
+            raise
 
     # ── 内部 ──
 
     def _record(self, model: str, usage: dict[str, int] | None,
-                latency_ms: int):
+                latency_ms: int, status: str = "ok"):
         prompt = (usage or {}).get("prompt_tokens", 0)
         completion = (usage or {}).get("completion_tokens", 0)
         cost = self._estimate_cost(model, prompt, completion)
@@ -92,6 +106,7 @@ class UsageRecorder(ModelGateway):
 
         record: dict[str, Any] = {
             "model": model,
+            "status": status,
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "latency_ms": latency_ms,
@@ -112,6 +127,17 @@ class UsageRecorder(ModelGateway):
                 )
             except Exception:
                 pass  # 持久化失败不影响主流程
+
+    def _record_error(self, model: str, latency_ms: int, error: Exception):
+        """记录一次调用失败。"""
+        self.error_count += 1
+        err_type = type(error).__name__
+        self.errors.append({
+            "model": model,
+            "error_type": err_type,
+            "latency_ms": latency_ms,
+            "timestamp": time.time(),
+        })
 
     def _estimate_cost(self, model: str, prompt_tokens: int,
                        completion_tokens: int) -> float:
@@ -137,6 +163,45 @@ class UsageRecorder(ModelGateway):
             "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
             "total_cost": round(self.total_cost, 6),
             "avg_latency_ms": avg_latency,
+        }
+
+    def get_metrics(self) -> dict[str, Any]:
+        """返回 Prometheus 风格的聚合指标，供 /api/metrics 消费。"""
+        avg_latency = (
+            round(sum(c["latency_ms"] for c in self.calls) / len(self.calls))
+            if self.calls else 0
+        )
+        # 按模型拆分统计
+        by_model: dict[str, dict[str, int | float]] = {}
+        for c in self.calls:
+            m = c["model"]
+            if m not in by_model:
+                by_model[m] = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "latency_sum": 0}
+            by_model[m]["calls"] += 1  # type:ignore[operator]
+            by_model[m]["prompt_tokens"] += c["prompt_tokens"]  # type:ignore[operator]
+            by_model[m]["completion_tokens"] += c["completion_tokens"]  # type:ignore[operator]
+            by_model[m]["latency_sum"] += c["latency_ms"]  # type:ignore[operator]
+
+        for m, v in by_model.items():
+            v["avg_latency_ms"] = round(v["latency_sum"] / v["calls"])  # type:ignore[arg-type]
+            del v["latency_sum"]
+
+        return {
+            "calls": {
+                "total": self.call_count,
+                "errors": self.error_count,
+                "error_rate": round(self.error_count / max(self.call_count, 1), 4),
+            },
+            "tokens": {
+                "prompt": self.total_prompt_tokens,
+                "completion": self.total_completion_tokens,
+                "total": self.total_prompt_tokens + self.total_completion_tokens,
+            },
+            "cost": round(self.total_cost, 6),
+            "latency": {
+                "avg_ms": avg_latency,
+            },
+            "by_model": by_model,
         }
 
     def format_summary(self) -> str:

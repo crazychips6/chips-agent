@@ -127,12 +127,15 @@ class SessionDB:
     def _serialize_content(content: str | list) -> str:
         """将 content 序列化为可存储的字符串。
 
-        str → 原样返回
+        str → 原样返回（清洗 surrogate 字符）
         list[dict] → JSON
         list[dataclass 对象]（TextBlock/ImageBlock）→ 先转 dict 再 JSON
+
+        注意：在写入层统一清洗 surrogate，避免下游 UnicodeEncodeError。
         """
         if isinstance(content, str):
-            return content
+            # 清洗 surrogate 字符（如 DeepSeek 输出的 \udce4）
+            return content.encode("utf-8", errors="replace").decode("utf-8")
         # 将 ContentBlock dataclass 对象转为 dict
         dicts = []
         for block in content:
@@ -287,6 +290,25 @@ class SessionDB:
         return dict(row) if row else {
             "call_count": 0, "total_prompt": 0,
             "total_completion": 0, "total_cost": 0.0,
+        }
+
+    def summary_stats(self) -> dict[str, int]:
+        """返回全库聚合统计（跨所有会话）。"""
+        with self._connect() as conn:
+            sessions = conn.execute("SELECT COUNT(*) AS cnt FROM sessions").fetchone()
+            messages = conn.execute("SELECT COUNT(*) AS cnt FROM messages").fetchone()
+            usage = conn.execute(
+                "SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt, "
+                "COALESCE(SUM(completion_tokens), 0) AS completion, "
+                "COALESCE(SUM(cost_estimate), 0) AS cost "
+                "FROM usage_log"
+            ).fetchone()
+        return {
+            "total_sessions": sessions["cnt"] if sessions else 0,
+            "total_messages": messages["cnt"] if messages else 0,
+            "total_prompt_tokens": usage["prompt"] if usage else 0,
+            "total_completion_tokens": usage["completion"] if usage else 0,
+            "total_estimated_cost": round(usage["cost"], 6) if usage else 0.0,
         }
 
     # ── Helpers ──

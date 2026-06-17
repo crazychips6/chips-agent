@@ -65,6 +65,7 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "name": record.name,
             "session": getattr(record, "session_id", ""),
+            "turn": getattr(record, "turn_number", 0),
             "msg": redact(record.getMessage()),
             "exc": redact(self.formatException(record.exc_info))
                    if record.exc_info else None,
@@ -95,6 +96,22 @@ class SessionFilter(logging.Filter):
         return True
 
 
+class TurnFilter(logging.Filter):
+    """向日志记录注入 turn_number 属性（当前对话轮次）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn_number: int = 0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.turn_number = self.turn_number
+        return True
+
+
+# 全局单例，供 agent loop 在每轮对话前更新
+_turn_filter = TurnFilter()
+
+
 class PrefixFilter(logging.Filter):
     """只放行 logger 名完全匹配或带子级点的记录。
 
@@ -122,6 +139,7 @@ class LogManager:
     def __init__(self) -> None:
         self._chips = logging.getLogger("chips")
         self._session_filter = SessionFilter()
+        self._turn_filter = _turn_filter  # 全局单例
         self._managed: list[logging.Handler] = []
 
     @classmethod
@@ -149,7 +167,7 @@ class LogManager:
         self._chips.setLevel(level)
 
         self._session_filter.session_id = session_id
-        extra_filters = [self._session_filter]
+        extra_filters = [self._session_filter, self._turn_filter]
 
         # 1. 主日志 chips.log — JSON 格式，全量
         main_h = self._build_handler(
@@ -238,3 +256,8 @@ def get_logger(name: str = "") -> logging.Logger:
 
 def set_session_id(session_id: str) -> None:
     LogManager.instance().set_session_id(session_id)
+
+
+def set_turn_number(turn: int) -> None:
+    """设置当前对话轮次，后续日志记录将携带此 turn_number。"""
+    _turn_filter.turn_number = turn
