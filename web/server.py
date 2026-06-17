@@ -25,11 +25,26 @@ logger = logging.getLogger("chips.web")
 
 HERE = Path(__file__).parent
 STATIC_DIR = HERE / "static"
-SECRET_KEY = os.getenv("CHIPS_WEB_SECRET", "change-me-in-production")
+
+# JWT 密钥：优先从环境变量读取，否则生成随机密钥（重启后 token 失效）
+_SECRET_KEY_ENV = os.getenv("CHIPS_WEB_SECRET")
+if _SECRET_KEY_ENV:
+    SECRET_KEY = _SECRET_KEY_ENV
+else:
+    import secrets
+    SECRET_KEY = secrets.token_hex(32)
+    logger.warning("CHIPS_WEB_SECRET 未设置，使用随机密钥（服务重启后已签发的 token 将失效）")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
-SIMPLE_USER = os.getenv("CHIPS_WEB_USER", "admin")
-SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS", "admin")
+
+# 登录凭据：必须通过环境变量显式设置，无默认值
+SIMPLE_USER = os.getenv("CHIPS_WEB_USER")
+SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS")
+if not SIMPLE_USER or not SIMPLE_PASS:
+    raise RuntimeError(
+        "必须设置 CHIPS_WEB_USER 和 CHIPS_WEB_PASS 环境变量才能启动 Web 服务"
+    )
 
 # ── 模型 ──
 
@@ -69,13 +84,18 @@ def verify_token(token: str) -> str | None:
 
 app = FastAPI(title="chips Web", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS：默认关闭跨域（前端同源无需 CORS），通过 CHIPS_WEB_CORS_ORIGINS 开启
+# 多个 origin 用逗号分隔：http://localhost:3000,https://example.com
+_CORS_ORIGINS = os.getenv("CHIPS_WEB_CORS_ORIGINS", "")
+CORS_ORIGINS = [o.strip() for o in _CORS_ORIGINS.split(",") if o.strip()]
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def get_current_user(request: Request) -> str:
