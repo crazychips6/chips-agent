@@ -348,6 +348,36 @@ async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)
     return {"reply": "".join(chunks)}
 
 
+# ── Tracing ──
+
+
+@app.get("/api/traces")
+async def list_traces(limit: int = 20):
+    """列出最近 trace 摘要。"""
+    from tool.tracer import tracer as _tracer
+    return {"traces": _tracer.list_traces(limit=limit)}
+
+
+@app.get("/api/traces/{trace_id}")
+async def get_trace(trace_id: str):
+    """获取指定 trace 的 span 树。"""
+    from tool.tracer import tracer as _tracer
+    tree = _tracer.get_trace_tree(trace_id)
+    if tree is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"trace_id": trace_id, "spans": tree}
+
+
+@app.get("/api/traces/{trace_id}/raw")
+async def get_trace_raw(trace_id: str):
+    """获取指定 trace 的原始 span 列表（平铺，不嵌套）。"""
+    from tool.tracer import tracer as _tracer
+    spans = _tracer.get_trace(trace_id)
+    if spans is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"trace_id": trace_id, "spans": spans}
+
+
 # ── 静态文件 ──
 
 if STATIC_DIR.is_dir():

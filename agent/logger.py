@@ -36,6 +36,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from safety.sanitize import redact
+from tool.tracer import tracer
 
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "log")
 
@@ -65,6 +66,7 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "name": record.name,
             "session": getattr(record, "session_id", ""),
+            "trace": getattr(record, "trace_id", ""),
             "turn": getattr(record, "turn_number", 0),
             "msg": redact(record.getMessage()),
             "exc": redact(self.formatException(record.exc_info))
@@ -85,7 +87,7 @@ class ConsoleFormatter(logging.Formatter):
 
 
 class SessionFilter(logging.Filter):
-    """向日志记录注入 session_id 属性。"""
+    """向日志记录注入 session_id 和 trace_id 属性。"""
 
     def __init__(self, session_id: str = ""):
         super().__init__()
@@ -93,6 +95,7 @@ class SessionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.session_id = self.session_id or "-"
+        record.trace_id = tracer.current_trace_id or "-"
         return True
 
 
