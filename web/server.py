@@ -352,7 +352,22 @@ async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)
 
 
 @app.get("/api/traces")
-async def list_traces(limit: int = 20):
+async def list_traces(limit: int = 20, session_id: str | None = None):
+    """列出最近 trace 摘要。可选按 session_id 过滤。"""
+    from tool.tracer import tracer as _tracer
+    traces = _tracer.list_traces(limit=limit)
+    if session_id:
+        traces = [t for t in traces if t.get("metadata", {}).get("session_id") == session_id]
+    return {"traces": traces}
+
+
+@app.get("/api/sessions/{session_id}/traces")
+async def list_session_traces(session_id: str, limit: int = 20):
+    """列出指定 session 的所有 trace。"""
+    from tool.tracer import tracer as _tracer
+    traces = _tracer.list_traces(limit=limit)
+    filtered = [t for t in traces if t.get("metadata", {}).get("session_id") == session_id]
+    return {"session_id": session_id, "traces": filtered}
     """列出最近 trace 摘要。"""
     from tool.tracer import tracer as _tracer
     return {"traces": _tracer.list_traces(limit=limit)}

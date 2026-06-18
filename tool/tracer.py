@@ -36,6 +36,26 @@ _MAX_TRACES = 100
 # Span 输入/输出字段截断长度
 _SPAN_DATA_MAX_LEN = 2000
 
+# 默认模型定价（$ per 1K tokens），与 gateway/stats.py 同步
+_PRICING: dict[str, dict[str, float]] = {
+    "deepseek-chat": {"input": 0.00014, "output": 0.00028},
+    "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},
+    "gpt-4o": {"input": 0.0025, "output": 0.01},
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
+    "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+    "gemini-1.5-pro": {"input": 0.00125, "output": 0.005},
+}
+
+
+def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """根据模型定价估算本次调用的费用（美元）。"""
+    pricing = _PRICING.get(model)
+    if not pricing:
+        return 0.0
+    input_cost = (prompt_tokens / 1000) * pricing["input"]
+    output_cost = (completion_tokens / 1000) * pricing["output"]
+    return round(input_cost + output_cost, 8)
+
 
 @dataclass
 class Span:
@@ -52,6 +72,8 @@ class Span:
     output: str = ""
     # 元数据
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 预估费用（美元），LLM call span 在 end_span 时根据 token 计算
+    cost: float = 0.0
 
     @property
     def duration_ms(self) -> int:
@@ -66,6 +88,7 @@ class Span:
             "parent_span_id": self.parent_span_id,
             "operation": self.operation,
             "duration_ms": self.duration_ms,
+            "cost": self.cost,
             "status": self.status,
             "input_truncated": self.input[:_SPAN_DATA_MAX_LEN] if self.input else "",
             "output_truncated": self.output[:_SPAN_DATA_MAX_LEN] if self.output else "",
@@ -143,7 +166,10 @@ class Tracer:
         output: str = "",
         metadata: dict[str, Any] | None = None,
     ):
-        """结束一个 span，记录结束时间和输出。"""
+        """结束一个 span，记录结束时间和输出。
+
+        如果 span 是 LLM call 且 metadata 包含 token 计数，自动估算费用。
+        """
         for span in self._spans:
             if span.span_id == span_id and span.end_time is None:
                 span.end_time = time.time()
@@ -151,6 +177,13 @@ class Tracer:
                 span.output = output
                 if metadata:
                     span.metadata.update(metadata)
+                # LLM call span：根据 token 计算费用
+                if span.operation == "llm.call":
+                    prompt = span.metadata.get("prompt_tokens", 0)
+                    completion = span.metadata.get("completion_tokens", 0)
+                    model = span.metadata.get("model", "")
+                    if prompt or completion:
+                        span.cost = _estimate_cost(model, prompt, completion)
                 return
         logger.warning("end_span not_found span_id=%s", span_id)
 
@@ -161,10 +194,20 @@ class Tracer:
         spans = self._trace_history.get(trace_id)
         if spans is None:
             return None
-        return [s.to_dict() for s in spans]
+        dicts = [s.to_dict() for s in spans]
+        total_cost = sum(s.cost for s in spans)
+        return {
+            "trace_id": trace_id,
+            "total_cost": round(total_cost, 8),
+            "spans": dicts,
+        }
 
     def get_trace_tree(self, trace_id: str) -> list[dict[str, Any]] | None:
-        """获取指定 trace 的 span 树（按 parent 关系嵌套）。"""
+        """获取指定 trace 的 span 树（按 parent 关系嵌套）。
+
+        每个 span 额外包含 `subtree_cost`（该 span + 所有子孙的 cost 总和），
+        实现 cost 逐级汇总：llm.call → iteration → agent.run。
+        """
         spans = self._trace_history.get(trace_id)
         if not spans:
             return None
@@ -179,11 +222,14 @@ class Tracer:
                 children.setdefault(pid, []).append(d)
             else:
                 root = d
-        # 递归嵌套
-        def _attach(parent: dict[str, Any]):
+        # 递归嵌套 + 成本汇总
+        def _attach(parent: dict[str, Any]) -> float:
             parent["children"] = children.get(parent["span_id"], [])
+            child_cost = 0.0
             for c in parent["children"]:
-                _attach(c)
+                child_cost += _attach(c)
+            parent["subtree_cost"] = round(parent["cost"] + child_cost, 8)
+            return parent["subtree_cost"]
         if root:
             _attach(root)
             return [root]
@@ -199,10 +245,12 @@ class Tracer:
             root = next((s for s in spans if s.parent_span_id is None), spans[0])
             duration = int((spans[-1].start_time - spans[0].start_time) * 1000) if len(spans) > 1 else 0
             errors = sum(1 for s in spans if s.status == "error")
+            total_cost = round(sum(s.cost for s in spans), 8)
             entry: dict[str, Any] = {
                 "trace_id": tid,
                 "span_count": len(spans),
                 "duration_ms": duration,
+                "cost": total_cost,
                 "errors": errors,
                 "started_at": spans[0].start_time,
             }
