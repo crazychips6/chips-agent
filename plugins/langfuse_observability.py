@@ -72,7 +72,7 @@ def register(ctx):
         logger.warning("LANGFUSE_PUBLIC_KEY 或 LANGFUSE_SECRET_KEY 未设置，跳过 Langfuse")
         return
 
-    host = os.getenv("LANGFUSE_HOST", _LANGFUSE_HOST)
+    host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or _LANGFUSE_HOST
     client = Langfuse(public_key=public_key, secret_key=secret_key, host=host)
 
     ctx.register_hook(LangfusePlugin(client))
@@ -282,6 +282,9 @@ class LangfusePlugin:
         return None
 
     # ── 会话结束 ──
+
+    def on_response(self, response: str) -> str | None:
+        return None
 
     def on_session_end(self, messages):
         """会话结束：关闭所有 trace 并 flush。"""
