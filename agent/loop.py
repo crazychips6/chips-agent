@@ -415,6 +415,13 @@ class AIAgent:
                                 )
                             except Exception:
                                 pass
+                        # 同步更新 Prometheus 工具指标
+                        try:
+                            from gateway.metrics import tool_calls_total, tool_duration_seconds
+                            tool_calls_total.labels(tool_name=name, status=tool_status).inc()
+                            tool_duration_seconds.labels(tool_name=name).observe(elapsed / 1000.0)
+                        except Exception:
+                            pass
                         # TUI 工具回调（调用后）
                         if tool_callback:
                             tool_callback(name, args, tool_result)

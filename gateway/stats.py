@@ -6,6 +6,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from gateway.metrics import (
+    llm_calls_total,
+    llm_tokens_total,
+    llm_cost_total,
+    llm_duration_seconds,
+    llm_errors_total,
+)
 from gateway.protocol import ModelGateway
 from gateway.types import ChatResult
 
@@ -128,6 +135,16 @@ class UsageRecorder(ModelGateway):
             except Exception:
                 pass  # 持久化失败不影响主流程
 
+        # 同步更新 Prometheus 指标
+        try:
+            llm_calls_total.labels(model=model, provider="", status=status).inc()
+            llm_tokens_total.labels(model=model, token_type="prompt").inc(prompt)
+            llm_tokens_total.labels(model=model, token_type="completion").inc(completion)
+            llm_cost_total.labels(model=model).inc(cost)
+            llm_duration_seconds.labels(model=model).observe(latency_ms / 1000.0)
+        except Exception:
+            pass  # 指标更新失败不影响主流程
+
     def _record_error(self, model: str, latency_ms: int, error: Exception):
         """记录一次调用失败。"""
         self.error_count += 1
@@ -138,6 +155,13 @@ class UsageRecorder(ModelGateway):
             "latency_ms": latency_ms,
             "timestamp": time.time(),
         })
+
+        # 同步更新 Prometheus 指标
+        try:
+            llm_calls_total.labels(model=model, provider="", status="error").inc()
+            llm_errors_total.labels(model=model, error_type=err_type).inc()
+        except Exception:
+            pass
 
     def _estimate_cost(self, model: str, prompt_tokens: int,
                        completion_tokens: int) -> float:

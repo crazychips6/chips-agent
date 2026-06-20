@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -236,6 +236,16 @@ async def shutdown():
 
 
 # ── 路由 ──
+
+
+@app.get("/metrics")
+async def metrics_prometheus():
+    """Prometheus 标准格式指标端点，供 Prometheus server 抓取。"""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return PlainTextResponse(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/api/health")
