@@ -214,6 +214,14 @@ def get_agent():
         wire_plugin_manager(plugin_mgr)
 
         _agent = agent
+        # 初始化部署状态指标
+        try:
+            from gateway.metrics import set_deployment_healthy
+            set_deployment_healthy("gateway")
+            set_deployment_healthy("session_db")
+            set_deployment_healthy("memory")
+        except Exception:
+            pass
         logger.info("agent_initialized")
     return _agent
 
@@ -274,16 +282,36 @@ async def health():
             "providers": providers,
             "active": len(providers),
         }
+        try:
+            from gateway.metrics import set_deployment_healthy, set_deployment_degraded
+            set_deployment_healthy("memory")
+        except Exception:
+            pass
     else:
         status["subsystems"]["memory"] = "disabled"
+        try:
+            from gateway.metrics import set_deployment_down
+            set_deployment_down("memory")
+        except Exception:
+            pass
 
     # Session DB 状态
     if agent and agent.session_db:
         try:
             count = agent.session_db.summary_stats().get("total_sessions", -1)
             status["subsystems"]["session_db"] = {"sessions": count, "status": "ok"}
+            try:
+                from gateway.metrics import set_deployment_healthy
+                set_deployment_healthy("session_db")
+            except Exception:
+                pass
         except Exception as e:
             status["subsystems"]["session_db"] = {"status": "error", "detail": str(e)}
+            try:
+                from gateway.metrics import set_deployment_degraded
+                set_deployment_degraded("session_db")
+            except Exception:
+                pass
     else:
         status["subsystems"]["session_db"] = "disabled"
 

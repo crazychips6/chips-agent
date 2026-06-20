@@ -69,3 +69,22 @@ deployment_state = Gauge(
     "Component health: 0=ok, 1=degraded, 2=down",
     ["component"],
 )
+
+# 初始化所有已知组件状态为 ok
+for _component in ("gateway", "session_db", "memory"):
+    deployment_state.labels(component=_component).set(0)
+
+
+def set_deployment_healthy(component: str) -> None:
+    """设置组件状态为健康 (0)。"""
+    deployment_state.labels(component=component).set(0)
+
+
+def set_deployment_degraded(component: str) -> None:
+    """设置组件状态为降级 (1)。"""
+    deployment_state.labels(component=component).set(1)
+
+
+def set_deployment_down(component: str) -> None:
+    """设置组件状态为宕机 (2)。"""
+    deployment_state.labels(component=component).set(2)
