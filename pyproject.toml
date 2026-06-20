@@ -16,6 +16,9 @@ dependencies = [
     "tiktoken>=0.13.0",
 ]
 
+[project.optional-dependencies]
+observability = ["langfuse>=2.0.0"]
+
 [project.scripts]
 chips = "agent.cli:main"
 

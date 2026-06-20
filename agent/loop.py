@@ -14,9 +14,6 @@ from collections import defaultdict
 # 防止后续请求序列化时 UnicodeEncodeError: surrogates not allowed
 _SURROGATE_RE = re.compile('[\ud800-\udfff]')
 
-def _truncate(text: str, max_len: int = 500) -> str:
-    return text[:max_len] + "..." if len(text) > max_len else text
-
 
 def _sanitize(text: str) -> str:
     return _SURROGATE_RE.sub("", text)
@@ -232,11 +229,6 @@ class AIAgent:
         set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
 
-        # ── 新 trace：本次对话的完整因果链（关联 session_id） ──
-        from tool.tracer import tracer
-        tracer.new_trace(metadata={"session_id": self.session_id})
-        conversation_span = tracer.start_span("agent.run", input=user_message[:500])
-
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
         from tool.toolsets import build_availability_table
@@ -260,6 +252,9 @@ class AIAgent:
             with open(_DEBUG_LOG, "w") as f:
                 json.dump([], f)
 
+        # 注入 session_id 到环境变量，供 Langfuse 插件使用
+        os.environ["CHIPS_SESSION_ID"] = self.session_id
+
         self._save_pending()
 
         rounds = [] if self.debug_context else None
@@ -268,15 +263,9 @@ class AIAgent:
         # ReAct 循环
         try:
             for iteration in range(max_iterations):
-                iteration_span = tracer.start_span(
-                    "iteration",
-                    parent_span_id=conversation_span,
-                    input=f"iteration={iteration}",
-                )
                 # 中断检查 ①：每次迭代开始
                 if self._is_interrupted():
                     logger.info("interrupt_requested iteration=%d", iteration)
-                    tracer.end_span(iteration_span, status="interrupted")
                     break
 
                 # 智能压缩（摘要保留信息，有 context engine 时优先）
@@ -317,15 +306,16 @@ class AIAgent:
                 # 中断检查 ②：在调用 LLM 之前，避免浪费 tokens
                 if self._is_interrupted():
                     logger.info("interrupt_requested before_llm iteration=%d", iteration)
-                    tracer.end_span(iteration_span, status="interrupted")
                     break
 
+                # LLM 调用前钩子（给 observability 插件用）
+                if self.plugin_manager:
+                    kwargs = self.plugin_manager.dispatch_llm_call_pre(
+                        api_messages, self.model, kwargs,
+                    )
+
                 # LLM 调用（通过 gateway，内部处理 retry/streaming）
-                llm_span = tracer.start_span(
-                    "llm.call",
-                    parent_span_id=iteration_span,
-                    input=_truncate(json.dumps({"model": self.model, "messages_count": len(api_messages), "tools": len(tools) if tools else 0})),
-                )
+                _llm_t0 = time.time()
                 llm_ok = False
                 if self.stream:
                     _on_chunk = chunk_callback or (lambda c: print(c, end="", flush=True))
@@ -349,14 +339,12 @@ class AIAgent:
                         max_tokens=4096, tools=tools if tools else None,
                     )
                 llm_ok = True
-                usage = result.usage or {}
-                tracer.end_span(llm_span, status="ok" if llm_ok else "error",
-                                metadata={
-                                    "model": self.model,
-                                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                                    "completion_tokens": usage.get("completion_tokens", 0),
-                                    "has_tool_calls": bool(result.tool_calls),
-                                })
+                _llm_duration = int((time.time() - _llm_t0) * 1000)
+                # LLM 调用后钩子（给 observability 插件用）
+                if self.plugin_manager:
+                    self.plugin_manager.dispatch_llm_call_post(
+                        api_messages, self.model, result, _llm_duration,
+                    )
 
                 if self.debug_context:
                     rounds.append({"request": {"model": self.model, "messages": api_messages, "max_tokens": 4096, "tools": tools if tools else None}, "response": {"content": result.content, "reasoning_content": result.reasoning_content, "tool_calls": result.tool_calls}})
@@ -396,13 +384,6 @@ class AIAgent:
                         if tool_callback:
                             tool_callback(name, args, None)
 
-                        # 工具执行 span
-                        tool_span = tracer.start_span(
-                            "tool.exec",
-                            parent_span_id=iteration_span,
-                            input=_truncate(f"{name}({args_str})"),
-                            metadata={"tool": name},
-                        )
                         # 工具执行判断， memory虽然是register发现，但是执行时被截断，只有tool被调用dispatch
                         if self.memory_manager.has_tool(name):
                             t0 = time.time()
@@ -432,8 +413,6 @@ class AIAgent:
                             "args_truncated": args_str[:200],
                             "session_id": self.session_id,
                         })
-                        tracer.end_span(tool_span, status="ok" if not tool_result.startswith('{"error"') else "error",
-                                        output=_truncate(tool_result, 500))
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],
@@ -445,9 +424,7 @@ class AIAgent:
                     # 中断检查 ③：工具执行批后，在此轮结束前检查
                     if self._is_interrupted():
                         logger.info("interrupt_requested after_tools iteration=%d", iteration)
-                        tracer.end_span(iteration_span, status="interrupted")
                         break
-                    tracer.end_span(iteration_span)
                 else:
                     content = result.content or ""
                     if self.plugin_manager:
@@ -465,7 +442,6 @@ class AIAgent:
                     self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
                     last_text_reply = content
-                    tracer.end_span(iteration_span, output=_truncate(content, 500))
                     if content:
                         if self.stream:
                             return ""  # 已由 chat_stream 的 on_chunk 实时输出
@@ -486,9 +462,6 @@ class AIAgent:
             self.memory_manager.on_session_end(self.messages)
             if self.plugin_manager:
                 self.plugin_manager.dispatch_session_end(self.messages)
-            # 结束 trace
-            tracer.end_span(conversation_span, output=_truncate(last_text_reply or "", 500))
-            tracer.end_trace()
 
     def shutdown(self):
         """释放资源：关闭 MCP 连接和所有记忆提供者。"""

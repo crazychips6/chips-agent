@@ -204,8 +204,11 @@ class UsageRecorder(ModelGateway):
             "by_model": by_model,
         }
 
-    def format_summary(self) -> str:
-        """格式化的统计摘要文本。"""
+    def format_summary(self, trace_cost: float | None = None) -> str:
+        """格式化的统计摘要文本。
+
+        trace_cost: 可选，传入最近一次 trace 的费用，会在统计中额外显示。
+        """
         s = self.summary()
         if s["call_count"] == 0:
             return ""
@@ -213,7 +216,9 @@ class UsageRecorder(ModelGateway):
             "── 会话统计 ──",
             f"LLM 调用: {s['call_count']} 次",
             f"Tokens:   {s['total_prompt_tokens']:,} 输入 + {s['total_completion_tokens']:,} 输出 = {s['total_tokens']:,}",
-            f"费用:     ${s['total_cost']:.6f}",
-            f"延迟:     {s['avg_latency_ms']}ms 平均",
         ]
+        if trace_cost is not None:
+            lines.append(f"本次费用: ${trace_cost:.8f}")
+        lines.append(f"会话费用: ${s['total_cost']:.6f}")
+        lines.append(f"延迟:     {s['avg_latency_ms']}ms 平均")
         return "\n".join(lines)

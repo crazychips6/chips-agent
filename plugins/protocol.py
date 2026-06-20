@@ -28,6 +28,19 @@ class HookPlugin(Protocol):
     def on_tool_call_post(self, tool_name: str, result: str) -> str | None:
         ...
 
+    def on_llm_call_pre(
+        self, messages: list[dict], model: str, kwargs: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """LLM 调用前触发。可返回修改后的 kwargs。"""
+        ...
+
+    def on_llm_call_post(
+        self, messages: list[dict], model: str,
+        result: Any, duration_ms: int,
+    ) -> None:
+        """LLM 调用后触发，携带耗时和结果。"""
+        ...
+
     def on_response(self, response: str) -> str | None:
         ...
 

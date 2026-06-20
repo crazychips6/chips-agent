@@ -36,7 +36,6 @@ from logging.handlers import RotatingFileHandler
 from typing import Optional
 
 from safety.sanitize import redact
-from tool.tracer import tracer
 
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "log")
 
@@ -87,7 +86,7 @@ class ConsoleFormatter(logging.Formatter):
 
 
 class SessionFilter(logging.Filter):
-    """向日志记录注入 session_id 和 trace_id 属性。"""
+    """向日志记录注入 session_id 属性。"""
 
     def __init__(self, session_id: str = ""):
         super().__init__()
@@ -95,7 +94,7 @@ class SessionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.session_id = self.session_id or "-"
-        record.trace_id = tracer.current_trace_id or "-"
+        record.trace_id = _current_trace_id or "-"
         return True
 
 
@@ -113,6 +112,9 @@ class TurnFilter(logging.Filter):
 
 # 全局单例，供 agent loop 在每轮对话前更新
 _turn_filter = TurnFilter()
+
+# 当前 Langfuse trace_id（由插件设置），贯穿日志
+_current_trace_id: str = ""
 
 
 class PrefixFilter(logging.Filter):
@@ -264,3 +266,15 @@ def set_session_id(session_id: str) -> None:
 def set_turn_number(turn: int) -> None:
     """设置当前对话轮次，后续日志记录将携带此 turn_number。"""
     _turn_filter.turn_number = turn
+
+
+def set_trace_id(trace_id: str) -> None:
+    """设置当前 Langfuse trace_id，后续日志记录将携带此 trace_id。"""
+    global _current_trace_id
+    _current_trace_id = trace_id
+
+
+def clear_trace_id() -> None:
+    """清除当前 trace_id（trace 结束时调用）。"""
+    global _current_trace_id
+    _current_trace_id = ""
