@@ -69,6 +69,20 @@ class SessionDB:
                     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
                 END;
 
+                CREATE TABLE IF NOT EXISTS tool_call_log (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    turn_number     INTEGER NOT NULL DEFAULT 0,
+                    tool_name       TEXT NOT NULL,
+                    status          TEXT NOT NULL DEFAULT 'success',
+                    duration_ms     REAL DEFAULT 0.0,
+                    error_message   TEXT DEFAULT '',
+                    created_at      REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_tool_call_session
+                    ON tool_call_log(session_id, id);
+
                 CREATE TABLE IF NOT EXISTS usage_log (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -252,6 +266,50 @@ class SessionDB:
 
         return [dict(r) for r in rows]
 
+    # ── Tool Call Log ──
+
+    def insert_tool_call(self, session_id: str, turn_number: int,
+                         tool_name: str, status: str = "success",
+                         duration_ms: float = 0.0,
+                         error_message: str = ""):
+        """记录一次工具调用。"""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO tool_call_log (session_id, turn_number, tool_name, "
+                "status, duration_ms, error_message, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_id, turn_number, tool_name, status,
+                 duration_ms, error_message, time.time()),
+            )
+
+    def get_tool_call_stats(self, session_id: str | None = None,
+                            days: int | None = None) -> list[dict]:
+        """返回工具调用聚合统计，可选按会话或天数过滤。"""
+        where_clauses = []
+        params: list = []
+        if session_id:
+            where_clauses.append("t.session_id = ?")
+            params.append(session_id)
+        if days is not None:
+            where_clauses.append("t.created_at >= ?")
+            params.append(time.time() - days * 86400)
+
+        where = ""
+        if where_clauses:
+            where = "WHERE " + " AND ".join(where_clauses)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT t.tool_name, "
+                f"COUNT(*) AS call_count, "
+                f"SUM(CASE WHEN t.status = 'error' THEN 1 ELSE 0 END) AS error_count, "
+                f"AVG(t.duration_ms) AS avg_duration_ms "
+                f"FROM tool_call_log t {where} "
+                f"GROUP BY t.tool_name ORDER BY call_count DESC",
+                params,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Usage Log ──
 
     def insert_usage(self, session_id: str, model: str,
@@ -309,6 +367,88 @@ class SessionDB:
             "total_prompt_tokens": usage["prompt"] if usage else 0,
             "total_completion_tokens": usage["completion"] if usage else 0,
             "total_estimated_cost": round(usage["cost"], 6) if usage else 0.0,
+        }
+
+    # ── Insights 聚合查询 ──
+
+    def cost_by_model(self, days: int = 7) -> list[dict]:
+        """按模型汇总指定天数内的费用和调用量。"""
+        cutoff = time.time() - days * 86400
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT model, COUNT(*) AS call_count, "
+                "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+                "COALESCE(SUM(cost_estimate), 0) AS total_cost "
+                "FROM usage_log WHERE created_at >= ? "
+                "GROUP BY model ORDER BY total_cost DESC",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def daily_cost_trend(self, days: int = 30) -> list[dict]:
+        """返回每日费用趋势。"""
+        cutoff = time.time() - days * 86400
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DATE(created_at, 'unixepoch') AS day, "
+                "COUNT(*) AS call_count, "
+                "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+                "COALESCE(SUM(cost_estimate), 0) AS total_cost "
+                "FROM usage_log WHERE created_at >= ? "
+                "GROUP BY day ORDER BY day",
+                (cutoff,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def session_portrait(self, session_id: str) -> dict:
+        """返回单个会话的完整画像。"""
+        with self._connect() as conn:
+            # 会话基本信息
+            sess = conn.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if sess is None:
+                return {}
+            sess_dict = dict(sess)
+
+            # 消息数
+            msg_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            msg_count = msg_row["cnt"] if msg_row else 0
+
+            # LLM 用量
+            usage = conn.execute(
+                "SELECT COUNT(*) AS call_count, "
+                "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+                "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+                "COALESCE(SUM(cost_estimate), 0) AS total_cost, "
+                "COALESCE(AVG(latency_ms), 0) AS avg_latency_ms "
+                "FROM usage_log WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+
+            # 工具调用
+            tools = conn.execute(
+                "SELECT tool_name, COUNT(*) AS call_count, "
+                "SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count, "
+                "AVG(duration_ms) AS avg_duration_ms "
+                "FROM tool_call_log WHERE session_id = ? "
+                "GROUP BY tool_name ORDER BY call_count DESC",
+                (session_id,),
+            ).fetchall()
+
+        return {
+            "session_id": session_id,
+            "title": sess_dict.get("title", ""),
+            "created_at": sess_dict.get("created_at", 0),
+            "updated_at": sess_dict.get("updated_at", 0),
+            "msg_count": msg_count,
+            "llm_calls": dict(usage) if usage else {},
+            "tool_calls": [dict(t) for t in tools],
         }
 
     # ── Helpers ──

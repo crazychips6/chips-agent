@@ -90,6 +90,19 @@ def _build_parser() -> argparse.ArgumentParser:
     web_cmd.add_argument("--host", default="0.0.0.0", help="监听地址")
     web_cmd.add_argument("--port", type=int, default=8648, help="监听端口")
 
+    # 子命令：chips insight
+    insight_cmd = subparsers.add_parser("insight", help="跨会话聚合报表")
+    insight_sub = insight_cmd.add_subparsers(dest="insight_action", required=True)
+    insight_cost = insight_sub.add_parser("cost", help="按模型费用排名")
+    insight_cost.add_argument("--days", type=int, default=7, help="统计天数")
+    insight_tools = insight_sub.add_parser("tools", help="工具使用统计")
+    insight_tools.add_argument("--days", type=int, default=7, help="统计天数")
+    insight_trend = insight_sub.add_parser("trend", help="每日费用趋势")
+    insight_trend.add_argument("--days", type=int, default=30, help="统计天数")
+    insight_portrait = insight_sub.add_parser("portrait", help="单会话完整画像")
+    insight_portrait.add_argument("session_id", help="会话 ID")
+    insight_weekly = insight_sub.add_parser("weekly", help="一键周报")
+
     return parser
 
 
@@ -129,6 +142,28 @@ def main():
     if args.command == "plugin":
         from plugins.cli import handle_plugin
         handle_plugin(args)
+        return
+
+    if args.command == "insight":
+        db_path = os.path.join(os.getcwd(), ".chips", "sessions.db")
+        from session.db import SessionDB
+        if not os.path.isfile(db_path):
+            print(f"⚠ 数据库文件不存在: {db_path}")
+            return
+        db = SessionDB(db_path)
+        from agent.insights import InsightsEngine
+        engine = InsightsEngine(db)
+        if args.insight_action == "cost":
+            print(engine.cost_by_model(days=args.days).format())
+        elif args.insight_action == "tools":
+            print(engine.tool_usage(days=args.days).format())
+        elif args.insight_action == "trend":
+            print(engine.daily_cost_trend(days=args.days).format())
+        elif args.insight_action == "portrait":
+            result = engine.session_portrait(args.session_id)
+            print(result.format())
+        elif args.insight_action == "weekly":
+            print(engine.weekly_report().format())
         return
 
     if args.version:

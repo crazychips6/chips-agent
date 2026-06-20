@@ -402,6 +402,19 @@ class AIAgent:
                                     tool_result = json.dumps({
                                         "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
                                     })
+                        # 持久化工具调用记录
+                        tool_status = "error" if tool_result.startswith('{"error"') else "success"
+                        if self.session_db:
+                            try:
+                                self.session_db.insert_tool_call(
+                                    session_id=self.session_id,
+                                    turn_number=self.turn_count,
+                                    tool_name=name,
+                                    status=tool_status,
+                                    duration_ms=elapsed,
+                                )
+                            except Exception:
+                                pass
                         # TUI 工具回调（调用后）
                         if tool_callback:
                             tool_callback(name, args, tool_result)

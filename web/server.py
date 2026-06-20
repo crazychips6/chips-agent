@@ -303,6 +303,65 @@ async def metrics():
     return result
 
 
+@app.get("/api/insights/cost-by-model")
+async def insights_cost_by_model(days: int = Query(7, ge=1, le=365)):
+    """按模型汇总费用。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.cost_by_model(days=days).dict()}
+
+
+@app.get("/api/insights/daily-cost")
+async def insights_daily_cost(days: int = Query(30, ge=1, le=365)):
+    """每日费用趋势。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.daily_cost_trend(days=days).dict()}
+
+
+@app.get("/api/insights/tool-usage")
+async def insights_tool_usage(days: int = Query(7, ge=1, le=365)):
+    """工具使用统计。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.tool_usage(days=days).dict()}
+
+
+@app.get("/api/insights/session/{session_id}")
+async def insights_session(session_id: str):
+    """单会话完整画像。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    result = engine.session_portrait(session_id)
+    data = result.dict()
+    if not data:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"insights": data}
+
+
+@app.get("/api/insights/weekly-report")
+async def insights_weekly():
+    """一键周报。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.weekly_report().dict()}
+
+
 @app.post("/api/login", response_model=TokenResponse)
 async def login(body: LoginRequest):
     if body.username == SIMPLE_USER and body.password == SIMPLE_PASS:
