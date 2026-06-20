@@ -224,6 +224,12 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
         self.turn_count += 1
+        # 活跃会话数 +1
+        try:
+            from gateway.metrics import session_active
+            session_active.inc()
+        except Exception:
+            pass
         # 更新日志轮次，后续所有 log record 将携带 turn_number
         from agent.logger import set_turn_number
         set_turn_number(self.turn_count)
@@ -478,6 +484,11 @@ class AIAgent:
                 return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
             return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
         finally:
+            try:
+                from gateway.metrics import session_active
+                session_active.dec()
+            except Exception:
+                pass
             self.memory_manager.sync_all(user_message, last_text_reply or "", session_id=self.session_id)
             self.memory_manager.on_session_end(self.messages)
             if self.plugin_manager:
