@@ -14,56 +14,54 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
 logger = logging.getLogger("chips.agent.insights")
+
+# rich 控制台（只用于渲染字符串，不输出到终端）
+_console = Console(width=200)
 
 
 class _Result:
     """包装查询结果，支持 .format() 终端表格和 .dict() 原生数据。"""
 
-    def __init__(self, title: str, rows: list[dict], columns: list[str]):
+    def __init__(self, title: str, rows: list[dict], columns: list[str],
+                 column_labels: dict[str, str] | None = None):
         self._title = title
         self._rows = rows
         self._columns = columns
+        # 列名 → 显示标签，未指定的直接使用列名
+        self._column_labels = column_labels or {}
 
     def format(self) -> str:
-        """输出 rich 表格文本。"""
+        """输出 rich 渲染的表格文本。"""
         if not self._rows:
-            # title 可能已包含完整内容（如 portrait 的 kv table + tool table）
             if self._title:
                 return f"\n{self._title}"
             return f"\n{self._title}\n（无数据）"
 
-        # 计算列宽
-        col_widths = {}
+        table = Table(title=self._title, title_justify="left",
+                      box=None, padding=(0, 1), collapse_padding=True)
+
         for col in self._columns:
-            header = str(col)
-            max_w = len(header)
-            for row in self._rows:
-                val = str(row.get(col, ""))
-                max_w = max(max_w, len(val))
-            col_widths[col] = max_w + 2  # 两边各一个空格
+            label = self._column_labels.get(col, col)
+            # 数值列右对齐，文本列左对齐
+            justify = "right" if col in ("call_count", "prompt_tokens", "completion_tokens",
+                                          "total_cost", "error_count", "error_rate_pct",
+                                          "avg_duration_ms", "avg_latency_ms") else "left"
+            table.add_column(label, justify=justify, no_wrap=True)
 
-        sep = "+" + "+".join("-" * w for w in col_widths.values()) + "+"
-
-        lines = [f"\n{self._title}", sep]
-        # 表头
-        header_line = "|"
-        for col in self._columns:
-            header_line += str(col).center(col_widths[col])
-        header_line += "|"
-        lines.append(header_line)
-        lines.append(sep)
-
-        # 数据行
         for row in self._rows:
-            row_line = "|"
-            for col in self._columns:
-                val = str(row.get(col, ""))
-                row_line += val.ljust(col_widths[col])
-            row_line += "|"
-            lines.append(row_line)
-        lines.append(sep)
-        return "\n".join(lines)
+            table.add_row(*[str(row.get(c, "")) for c in self._columns])
+
+        # 用 rich 渲染为字符串
+        with _console.capture() as capture:
+            _console.print(table)
+        result = capture.get()
+        # 首行空行是 rich 的默认行为，去掉多余的
+        return "\n" + result.rstrip("\n")
 
     def dict(self) -> list[dict]:
         return self._rows
@@ -185,13 +183,11 @@ class InsightsEngine:
         """渲染键值列表为表格。"""
         if not rows:
             return ""
-        key_w = max(len(r.get("字段", "")) for r in rows) + 2
-        val_w = max(len(str(r.get("值", ""))) for r in rows) + 2
-        sep = "+" + "-" * key_w + "+" + "-" * val_w + "+"
-        lines = [sep]
+        table = Table(box=None, padding=(0, 1), collapse_padding=True)
+        table.add_column("字段", justify="left", no_wrap=True)
+        table.add_column("值", justify="left", no_wrap=True)
         for r in rows:
-            k = str(r.get("字段", "")).ljust(key_w)
-            v = str(r.get("值", "")).ljust(val_w)
-            lines.append(f"|{k}|{v}|")
-        lines.append(sep)
-        return "\n".join(lines)
+            table.add_row(str(r.get("字段", "")), str(r.get("值", "")))
+        with _console.capture() as capture:
+            _console.print(table)
+        return capture.get().rstrip("\n")
