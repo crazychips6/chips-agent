@@ -133,7 +133,7 @@ class InsightsEngine:
             {"字段": "LLM 调用次数", "值": str(calls)},
             {"字段": "Prompt tokens", "值": f"{prompt:,}"},
             {"字段": "Completion tokens", "值": f"{completion:,}"},
-            {"字段": "总费用", "值": f"${cost:.6f}"},
+            {"字段": "总费用", "值": f"{cost:.6f}元"},
             {"字段": "平均延迟", "值": f"{avg_latency}ms"},
         ]
 
@@ -168,7 +168,7 @@ class InsightsEngine:
         # 总览
         total_cost = sum(r.get("total_cost", 0) for r in cost_rows.dict())
         total_calls = sum(r.get("call_count", 0) for r in cost_rows.dict())
-        parts.append(f"  总费用: ${total_cost:.6f}")
+        parts.append(f"  总费用: {total_cost:.6f}元")
         parts.append(f"  总调用: {total_calls} 次")
         parts.append("")
 

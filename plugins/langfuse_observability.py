@@ -29,31 +29,36 @@ logger = logging.getLogger("chips.plugins.langfuse")
 _MAX_CHARS = 8000
 _LANGFUSE_HOST = "https://cloud.langfuse.com"
 
-# 模型定价（$ per 1K tokens），含 cache/reasoning 细分
-_PRICING: dict[str, dict[str, float]] = {
-    "deepseek-chat":           {"input": 0.00014, "output": 0.00028},
-    "deepseek-reasoner":       {"input": 0.00055, "output": 0.00219, "cache_read": 0.00014, "reasoning": 0.00219},
-    "gpt-4o":                  {"input": 0.0025,  "output": 0.01,    "cache_read": 0.00125},
-    "gpt-4o-mini":             {"input": 0.00015, "output": 0.0006,  "cache_read": 0.000075},
-    "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015, "cache_read": 0.0003, "cache_write": 0.00375},
-    "gemini-1.5-pro":          {"input": 0.00125, "output": 0.005},
-}
+# 统一引用 gateway.stats 的定价（单点维护，自动同步）
+# 如需覆盖，在 ~/.chips/config.yaml 中配置 models.pricing
+from gateway.stats import DEFAULT_PRICING as _PRICING
 
 
 def _estimate_cost(model: str, prompt: int, completion: int,
                    cache_read: int = 0, cache_write: int = 0,
                    reasoning: int = 0) -> dict[str, float]:
     """估算费用分解，返回 {input, output, cache_read, cache_write, reasoning, total}。"""
-    pricing = _PRICING.get(model, _PRICING.get("deepseek-chat", {}))
+    pricing = _PRICING.get(model, {})
+    in_price = pricing.get("input", 0)
+    out_price = pricing.get("output", 0)
+    cr_price = pricing.get("cache_read", in_price * 0.5)
+    cw_price = pricing.get("cache_write", in_price)
+    r_price = pricing.get("reasoning", out_price)
+
+    # input 只算非缓存部分，缓存部分单独列出
+    non_cached = max(prompt - cache_read, 0)
+    input_cost = round((non_cached / 1000000) * in_price, 10)
+    output_cost = round((completion / 1000000) * out_price, 10)
+
     result: dict[str, float] = {}
-    result["input"] = round((prompt / 1000) * pricing.get("input", 0), 10)
-    result["output"] = round((completion / 1000) * pricing.get("output", 0), 10)
+    result["input"] = input_cost
+    result["output"] = output_cost
     if cache_read:
-        result["cache_read_input_tokens"] = round((cache_read / 1000) * pricing.get("cache_read", pricing.get("input", 0) * 0.5), 10)
+        result["cache_read_input_tokens"] = round((cache_read / 1000000) * cr_price, 10)
     if cache_write:
-        result["cache_creation_input_tokens"] = round((cache_write / 1000) * pricing.get("cache_write", pricing.get("input", 0)), 10)
+        result["cache_creation_input_tokens"] = round((cache_write / 1000000) * cw_price, 10)
     if reasoning:
-        result["reasoning_tokens"] = round((reasoning / 1000) * pricing.get("reasoning", pricing.get("output", 0)), 10)
+        result["reasoning_tokens"] = round((reasoning / 1000000) * r_price, 10)
     result["total"] = round(sum(result.values()), 10)
     return result
 

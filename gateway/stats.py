@@ -9,14 +9,16 @@ from typing import Any
 from gateway.protocol import ModelGateway
 from gateway.types import ChatResult
 
-# 默认模型定价（$ per 1K tokens）
+# 默认模型定价（单位：元/百万 tokens）
+# 如需覆盖，在 ~/.chips/config.yaml 中配置 models.pricing
 DEFAULT_PRICING: dict[str, dict[str, float]] = {
-    "deepseek-chat": {"input": 0.00014, "output": 0.00028},
-    "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},
-    "gpt-4o": {"input": 0.0025, "output": 0.01},
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
-    "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
-    "gemini-1.5-pro": {"input": 0.00125, "output": 0.005},
+    "deepseek-chat":              {"input": 1.0,   "output": 2.0,   "cache_read": 0.1},
+    "deepseek-reasoner":          {"input": 4.0,   "output": 16.0,  "cache_read": 4.0},
+    "gpt-4o":                     {"input": 18.0,  "output": 72.0,  "cache_read": 9.0},
+    "gpt-4o-mini":                {"input": 1.1,   "output": 4.3,   "cache_read": 0.54},
+    "claude-3-5-sonnet-20241022": {"input": 21.6,  "output": 108.0, "cache_read": 2.16, "cache_write": 27.0},
+    "gemini-1.5-pro":             {"input": 9.0,   "output": 36.0},
+    "gemini-1.5-flash":           {"input": 0.54,  "output": 2.16},
 }
 
 
@@ -55,6 +57,7 @@ class UsageRecorder(ModelGateway):
         """重置会话级统计。"""
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_cache_read_tokens = 0
         self.total_cost = 0.0
         self.call_count = 0
         self.error_count = 0
@@ -97,10 +100,17 @@ class UsageRecorder(ModelGateway):
                 latency_ms: int, status: str = "ok"):
         prompt = (usage or {}).get("prompt_tokens", 0)
         completion = (usage or {}).get("completion_tokens", 0)
-        cost = self._estimate_cost(model, prompt, completion)
+        # 提取缓存 token（兼容 OpenAI 格式和 Anthropic 格式）
+        prompt_details = (usage or {}).get("prompt_tokens_details") or {}
+        cache_read = prompt_details.get("cached_tokens", 0)
+        if not cache_read:
+            cache_read = (usage or {}).get("cache_read_input_tokens", 0)
+        cache_write = (usage or {}).get("cache_creation_input_tokens", 0)
+        cost = self._estimate_cost(model, prompt, completion, cache_read, cache_write)
 
         self.total_prompt_tokens += prompt
         self.total_completion_tokens += completion
+        self.total_cache_read_tokens += cache_read
         self.total_cost += cost
         self.call_count += 1
 
@@ -109,6 +119,8 @@ class UsageRecorder(ModelGateway):
             "status": status,
             "prompt_tokens": prompt,
             "completion_tokens": completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
             "latency_ms": latency_ms,
             "cost": cost,
             "timestamp": time.time(),
@@ -162,13 +174,19 @@ class UsageRecorder(ModelGateway):
             pass
 
     def _estimate_cost(self, model: str, prompt_tokens: int,
-                       completion_tokens: int) -> float:
+                       completion_tokens: int,
+                       cache_read: int = 0, cache_write: int = 0) -> float:
+        """估算费用，返回 元（CNY）。"""
         pricing = self._pricing.get(model)
         if not pricing:
             return 0.0
-        input_cost = (prompt_tokens / 1000) * pricing["input"]
-        output_cost = (completion_tokens / 1000) * pricing["output"]
-        return round(input_cost + output_cost, 6)
+        input_cost = (prompt_tokens / 1000000) * pricing["input"]
+        output_cost = (completion_tokens / 1000000) * pricing["output"]
+        # 缓存 token 折扣（退回全价，按缓存价重算）
+        cache_refund = (cache_read / 1000000) * (pricing.get("input", 0) - pricing.get("cache_read", 0))
+        if cache_write:
+            cache_refund += (cache_write / 1000000) * (pricing.get("input", 0) - pricing.get("cache_write", 0))
+        return round(max(input_cost + output_cost - cache_refund, 0.0), 10)
 
     # ── 统计 ──
 
@@ -178,11 +196,16 @@ class UsageRecorder(ModelGateway):
             round(sum(c["latency_ms"] for c in self.calls) / len(self.calls))
             if self.calls else 0
         )
+        total_read = sum(c.get("cache_read_tokens", 0) for c in self.calls)
+        total_prompt = self.total_prompt_tokens
+        cache_rate = round(total_read / total_prompt * 100, 1) if total_prompt else 0.0
         return {
             "call_count": self.call_count,
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "total_tokens": self.total_prompt_tokens + self.total_completion_tokens,
+            "cache_read_tokens": self.total_cache_read_tokens,
+            "cache_hit_rate_pct": cache_rate,
             "total_cost": round(self.total_cost, 6),
             "avg_latency_ms": avg_latency,
         }
@@ -239,8 +262,10 @@ class UsageRecorder(ModelGateway):
             f"LLM 调用: {s['call_count']} 次",
             f"Tokens:   {s['total_prompt_tokens']:,} 输入 + {s['total_completion_tokens']:,} 输出 = {s['total_tokens']:,}",
         ]
+        if s.get("cache_hit_rate_pct"):
+            lines.append(f"缓存命中: {s['cache_read_tokens']:,} token ({s['cache_hit_rate_pct']}%)")
         if trace_cost is not None:
-            lines.append(f"本次费用: ${trace_cost:.8f}")
-        lines.append(f"会话费用: ${s['total_cost']:.6f}")
+            lines.append(f"本次费用: {trace_cost:.8f} 元")
+        lines.append(f"会话费用: {s['total_cost']:.6f} 元")
         lines.append(f"延迟:     {s['avg_latency_ms']}ms 平均")
         return "\n".join(lines)

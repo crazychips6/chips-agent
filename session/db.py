@@ -89,6 +89,7 @@ class SessionDB:
                     model           TEXT NOT NULL,
                     prompt_tokens   INTEGER NOT NULL DEFAULT 0,
                     completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
                     latency_ms      INTEGER NOT NULL DEFAULT 0,
                     cost_estimate   REAL DEFAULT 0.0,
                     created_at      REAL NOT NULL
@@ -314,15 +315,25 @@ class SessionDB:
 
     def insert_usage(self, session_id: str, model: str,
                      prompt_tokens: int, completion_tokens: int,
-                     latency_ms: int, cost_estimate: float = 0.0):
+                     latency_ms: int, cost_estimate: float = 0.0,
+                     cache_read_tokens: int = 0):
         """记录一次 LLM 调用用量。"""
+        # 旧库可能没有 cache_read_tokens 列，用 ALTER TABLE 兼容
         with self._lock, self._connect() as conn:
+            try:
+                conn.execute(
+                    "ALTER TABLE usage_log ADD COLUMN cache_read_tokens "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            except Exception:
+                pass  # 列已存在
             conn.execute(
                 "INSERT INTO usage_log (session_id, model, prompt_tokens, "
-                "completion_tokens, latency_ms, cost_estimate, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "completion_tokens, cache_read_tokens, latency_ms, "
+                "cost_estimate, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_id, model, prompt_tokens, completion_tokens,
-                 latency_ms, cost_estimate, time.time()),
+                 cache_read_tokens, latency_ms, cost_estimate, time.time()),
             )
 
     def get_session_usage(self, session_id: str) -> list[dict]:

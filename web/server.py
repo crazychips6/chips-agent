@@ -52,6 +52,7 @@ if not SIMPLE_USER or not SIMPLE_PASS:
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    reset: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -417,6 +418,16 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
 
     def run():
         try:
+            if body.reset:
+                agent.messages.clear()
+                agent._saved_count = 0
+                agent._tool_call_history.clear()
+                agent.session_id = agent.session_db.create_session()
+                if agent.context_engine:
+                    agent.context_engine.on_session_reset()
+                gateway = getattr(agent, "gateway", None)
+                if gateway and hasattr(gateway, "reset"):
+                    gateway.reset()
             agent.run_conversation(body.message, chunk_callback=on_chunk)
         except Exception as e:
             queue.put_nowait(f"\n[Error: {e}]")
@@ -440,6 +451,16 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
 async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)):
     """非流式接口，适合测试。"""
     agent = get_agent()
+    if body.reset:
+        agent.messages.clear()
+        agent._saved_count = 0
+        agent._tool_call_history.clear()
+        agent.session_id = agent.session_db.create_session()
+        if agent.context_engine:
+            agent.context_engine.on_session_reset()
+        gateway = getattr(agent, "gateway", None)
+        if gateway and hasattr(gateway, "reset"):
+            gateway.reset()
     chunks: list[str] = []
     agent.run_conversation(body.message, chunk_callback=lambda c: chunks.append(c))
     return {"reply": "".join(chunks)}

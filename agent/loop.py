@@ -391,23 +391,29 @@ class AIAgent:
                             tool_callback(name, args, None)
 
                         # 工具执行判断， memory虽然是register发现，但是执行时被截断，只有tool被调用dispatch
-                        if self.memory_manager.has_tool(name):
-                            t0 = time.time()
-                            tool_result = self.memory_manager.handle_tool_call(name, args)
+                        t0 = 0.0
+                        try:
+                            if self.memory_manager.has_tool(name):
+                                t0 = time.time()
+                                tool_result = self.memory_manager.handle_tool_call(name, args)
+                                elapsed = int((time.time() - t0) * 1000)
+                                logger.info("tool=%s source=memory_manager duration_ms=%d", name, elapsed)
+                            else:
+                                t0 = time.time()
+                                tool_result = self.registry.dispatch(name, args)
+                                elapsed = int((time.time() - t0) * 1000)
+                                logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
+                                # Deferred Tools: 如果 LLM 调用了 toolset 名而非工具名，给提示
+                                if tool_result.startswith('{"error": "unknown tool:'):
+                                    from tool.toolsets import get_toolset
+                                    if get_toolset(name):
+                                        tool_result = json.dumps({
+                                            "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
+                                        })
+                        except Exception as e:
                             elapsed = int((time.time() - t0) * 1000)
-                            logger.info("tool=%s source=memory_manager duration_ms=%d", name, elapsed)
-                        else:
-                            t0 = time.time()
-                            tool_result = self.registry.dispatch(name, args)
-                            elapsed = int((time.time() - t0) * 1000)
-                            logger.info("tool=%s source=registry duration_ms=%d", name, elapsed)
-                            # Deferred Tools: 如果 LLM 调用了 toolset 名而非工具名，给提示
-                            if tool_result.startswith('{"error": "unknown tool:'):
-                                from tool.toolsets import get_toolset
-                                if get_toolset(name):
-                                    tool_result = json.dumps({
-                                        "error": f"'{name}' 是工具集名，不是工具名。请先通过 toolset enable {name} 激活工具集，然后使用具体的工具名（如 toolset list 查看）"
-                                    })
+                            tool_result = json.dumps({"error": f"工具执行异常: {e}"}, ensure_ascii=False)
+                            logger.exception("tool_exception tool=%s duration_ms=%d", name, elapsed)
                         # 持久化工具调用记录
                         tool_status = "error" if tool_result.startswith('{"error"') else "success"
                         if self.session_db:
