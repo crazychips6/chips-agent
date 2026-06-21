@@ -18,6 +18,7 @@ const useChatActions = () => {
 
   const clearChat = useCallback(() => {
     setMessages([])
+    useStore.getState().setPendingReset(true)
   }, [setMessages])
 
   const focusChatInput = useCallback(() => {

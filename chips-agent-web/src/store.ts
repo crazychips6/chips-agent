@@ -10,6 +10,8 @@ interface Store {
   setMessages: (
     messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
   ) => void
+  pendingReset: boolean
+  setPendingReset: (pending: boolean) => void
   chatInputRef: React.RefObject<HTMLTextAreaElement | null>
 }
 
@@ -27,5 +29,7 @@ export const useStore = create<Store>()((set) => ({
           ? messages(state.messages)
           : messages,
     })),
+  pendingReset: false,
+  setPendingReset: (pending) => set(() => ({ pendingReset: pending })),
   chatInputRef: { current: null },
 }))
