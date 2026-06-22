@@ -130,6 +130,34 @@ def _build_memory_manager(holographic: bool = False) -> MemoryManager:
     return mm
 
 
+def _wire_auto_plan(agent, args, agent_registry):
+    """将 RuleEngine + LLMRouter 注入 Agent。
+
+    必须在 agent.registry / agent.tool_names 已初始化后调用。
+    """
+    use_auto_plan = args.auto_plan and not args.no_auto_plan
+    if not use_auto_plan:
+        return
+
+    from rules.engine import RuleEngine
+    rule_engine = RuleEngine(
+        include_defaults=True,
+        tool_names=agent.tool_names,
+    )
+    agent.auto_plan = True
+    agent._rule_engine = rule_engine
+    logger = get_logger()
+    logger.info("rule_engine_loaded rules=%d", len(rule_engine.rules))
+
+    from rules.llm_router import LLMRouter
+    agent._llm_router = LLMRouter(
+        gateway=agent.gateway,
+        agent_registry=agent_registry,
+        model=agent.model,
+    )
+    logger.info("llm_router_loaded")
+
+
 def main():
     load_dotenv()
 
@@ -308,26 +336,7 @@ def main():
     agent.session_db = session_db
 
     # ── 自动路由规划（RuleEngine + LLM Router） ──
-    use_auto_plan = args.auto_plan and not args.no_auto_plan
-    if use_auto_plan:
-        from rules.engine import RuleEngine
-        rule_engine = RuleEngine(
-            include_defaults=True,
-            tool_names=agent.tool_names,
-        )
-        agent.auto_plan = True
-        agent._rule_engine = rule_engine
-        logger = get_logger()
-        logger.info("rule_engine_loaded rules=%d", len(rule_engine.rules))
-
-        # LLM Router（规则引擎未命中时触发，同进程内无额外调用成本）
-        from rules.llm_router import LLMRouter
-        agent._llm_router = LLMRouter(
-            gateway=agent.gateway,
-            agent_registry=agent_registry,  # noqa: F821
-            model=agent.model,
-        )
-        logger.info("llm_router_loaded")
+    _wire_auto_plan(agent, args, agent_registry)
 
     if args.resume:
         session_id = args.resume if isinstance(args.resume, str) else None
