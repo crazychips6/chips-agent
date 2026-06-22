@@ -133,22 +133,15 @@ TODO_SCHEMA = {
     "function": {
         "name": "todo",
         "description": (
-            "管理当前会话的任务列表。用于 3 步以上的复杂任务或用户提出多项任务时。\n\n"
-            "写入：传入 todos 参数创建/更新条目\n"
-            "  - merge=false（默认）：用全新的计划替换整个列表\n"
-            "  - merge=true：按 id 更新已有条目，新增不存在的条目\n"
-            "读取：不传参数即可读取当前列表\n\n"
-            "每条：{id, content, status}，其中 status 为 pending/in_progress/completed/cancelled\n"
-            "列表顺序即优先级。同时只能有一个 in_progress。\n"
-            "完成后立即标记为 completed。失败则取消并新建修正条目。\n\n"
-            "始终返回完整的当前列表。"
+            "管理会话任务列表：传 todos 写入/更新（merge=true 合并，"
+            "false=替换），省略则读取。每条含 id/content/status。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "要写入的任务条目。省略则读取当前列表。",
+                    "description": "要写入的条目。省略则读取。",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -165,7 +158,7 @@ TODO_SCHEMA = {
                 },
                 "merge": {
                     "type": "boolean",
-                    "description": "true=按 id 合并更新，false=替换整个列表",
+                    "description": "按 id 合并（false=替换）",
                     "default": False,
                 },
             },

@@ -249,14 +249,8 @@ ORCHESTRATE_SCHEMA = {
     "function": {
         "name": "orchestrate",
         "description": (
-            "多 Agent 编排执行。支持三种模式：\n\n"
-            "1. supervisor（推荐）：定义多个子任务，并发或串行执行，汇总结果\n"
-            '   例: {"mode":"supervisor","steps":[{"agent":"researcher","task":"搜索A"},...],"parallel":true}\n\n'
-            "2. pipeline：链式执行，上一步的输出自动注入下一步的上下文\n"
-            '   例: {"mode":"pipeline","steps":[{"agent":"coder","task":"写代码"},{"agent":"reviewer","task":"审查"}]}\n\n'
-            "3. debate：多个 Agent 独立回答同一问题，返回对比\n"
-            '   例: {"mode":"debate","agents":["coder","researcher"],"task":"这个设计有什么问题？"}\n\n'
-            "适用场景：需要多个子 Agent 协作完成的复杂任务。"
+            "多 Agent 编排三种模式：supervisor（并发/串行子任务）、"
+            "pipeline（链式接力）、debate（多 Agent 对比回答）。"
         ),
         "parameters": {
             "type": "object",
@@ -277,24 +271,24 @@ ORCHESTRATE_SCHEMA = {
                         },
                         "required": ["agent", "task"],
                     },
-                    "description": "步骤列表（supervisor/pipeline 使用）",
+                    "description": "子任务步骤",
                 },
                 "agents": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Agent 角色名列表（debate 使用）",
+                    "description": "debate 的 Agent 列表",
                 },
                 "task": {
                     "type": "string",
-                    "description": "任务描述（debate 使用，所有 Agent 回答同一问题）",
+                    "description": "debate 的任务",
                 },
                 "goal": {
                     "type": "string",
-                    "description": "总体目标描述（supervisor 使用，可选）",
+                    "description": "总目标（supervisor 可选）",
                 },
                 "parallel": {
                     "type": "boolean",
-                    "description": "是否并发执行子任务（supervisor 使用，默认 false）",
+                    "description": "并发执行（supervisor，默认 false）",
                 },
             },
             "required": ["mode"],

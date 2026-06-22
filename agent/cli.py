@@ -187,7 +187,6 @@ def main():
 
     if args.command == "insight":
         db_path = os.path.join(os.getcwd(), ".chips", "sessions.db")
-        from session.db import SessionDB
         if not os.path.isfile(db_path):
             print(f"⚠ 数据库文件不存在: {db_path}")
             return
@@ -292,8 +291,8 @@ def main():
     wire_parent(agent)
     from config.agent_config import AgentRegistry
     agent_registry = AgentRegistry()
+    wire_registry(agent_registry)
     if agent_registry:
-        wire_registry(agent_registry)
         # ── 将 agent 角色名注入工具 schema（enum 约束，LLM 第一轮就能选对） ──
         from tool.registry import registry as _tool_registry
         _agent_names = agent_registry.names

@@ -69,28 +69,21 @@ CLARIFY_SCHEMA = {
     "function": {
         "name": "clarify",
         "description": (
-            "向用户追问澄清、征求意见或确认决策。支持两种模式：\n\n"
-            "1. 多选 — 提供最多 4 个选项，用户选择或输入其他答案\n"
-            "2. 开放 — 不传 choices，用户自由输入\n\n"
-            "何时使用：\n"
-            "- 任务存在歧义，需要用户选择方向\n"
-            "- 有多个合理方案需要用户权衡\n"
-            "- 想询问用户是否保存技能或更新记忆\n\n"
-            "不要用此工具确认危险命令（terminal 工具自带确认）。"
-            "低风险决策应自行做出合理默认选择。"
+            "向用户追问澄清。支持多选（传 choices，最多 4 项）和开放输入两种模式。"
+            "仅在任务有歧义或需用户决策时使用。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "向用户提出的问题",
+                    "description": "问题",
                 },
                 "choices": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": MAX_CHOICES,
-                    "description": "最多 4 个选项。省略则开放输入。",
+                    "description": "选项列表（最多 4 项）",
                 },
             },
             "required": ["question"],

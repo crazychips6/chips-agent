@@ -256,9 +256,9 @@ class TestFactExtraction:
         assert "review" in facts["intent_keyword"]
 
     def test_mentions_tool_with_names(self):
-        facts = extract_facts("使用 web_search 工具搜索一下",
-                              tool_names={"web_search", "web_fetch", "read"})
-        assert "web_search" in facts.get("mentions_tool", [])
+        facts = extract_facts("使用 web 工具搜索一下",
+                              tool_names={"web", "file"})
+        assert "web" in facts.get("mentions_tool", [])
 
     def test_mentions_tool_empty_without_names(self):
         facts = extract_facts("使用 web_search 工具搜索一下")

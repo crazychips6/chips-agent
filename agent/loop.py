@@ -94,6 +94,8 @@ class AIAgent:
         self._frozen_base: str | None = None
         # 对话轮次计数器（跨 run_conversation 调用递增）
         self.turn_count: int = 0
+        # 连续失败检测（同一工具连续报错 ≥3 次时强制停止）
+        self._consecutive_failures: int = 0
 
         # ── 中断管理 ──
         # 使用 threading.Event（而非 bool），为未来多线程场景预留
@@ -367,6 +369,8 @@ class AIAgent:
 
         # 重置工具循环检测
         self._tool_call_history = defaultdict(int)
+        # 重置连续失败计数器
+        self._consecutive_failures = 0
 
         # debug_context 日志
         if self.debug_context:
@@ -561,6 +565,17 @@ class AIAgent:
                             "args_truncated": args_str[:200],
                             "session_id": self.session_id,
                         })
+                        # 连续失败检测
+                        if tool_result.startswith('{"error"') or tool_result.startswith("错误："):
+                            self._consecutive_failures += 1
+                            if self._consecutive_failures >= 3:
+                                tool_result = (
+                                    f"错误：工具 {name} 已连续失败 {self._consecutive_failures} 次，"
+                                    "说明当前方法行不通。请停止重试，换完全不同的策略，"
+                                    "或直接向用户说明失败原因。"
+                                )
+                        else:
+                            self._consecutive_failures = 0
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tc["id"],

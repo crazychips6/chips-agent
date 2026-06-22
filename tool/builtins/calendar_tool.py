@@ -193,13 +193,8 @@ CALENDAR_SCHEMA = {
     "function": {
         "name": "calendar",
         "description": (
-            "日期时间查询与计算工具。支持五个操作：\n\n"
-            "1. now — 获取当前日期、时间、时区、星期\n"
-            "2. month — 获取指定月份的日历（year, month），含天数、首日星期\n"
-            "3. diff — 计算两个日期之间的天数（from, to，格式 YYYY-MM-DD）\n"
-            "4. weekday — 查询某日是星期几（date，格式 YYYY-MM-DD）\n"
-            "5. add — 推算 N 天后的日期（date, days），days 可为负数\n\n"
-            "当你需要可靠的日期计算时使用此工具，不要依赖自己的训练数据推算。"
+            "日期时间查询。支持 now（当前时间）、month（月历）、"
+            "diff（日期差）、weekday（星期）、add（N 天后）。"
         ),
         "parameters": {
             "type": "object",
@@ -211,27 +206,27 @@ CALENDAR_SCHEMA = {
                 },
                 "year": {
                     "type": "integer",
-                    "description": "年份（month 操作使用，默认当前年）",
+                    "description": "年份，默认当前",
                 },
                 "month": {
                     "type": "integer",
-                    "description": "月份 1-12（month 操作使用，默认当前月）",
+                    "description": "月份 1-12，默认当前",
                 },
                 "from": {
                     "type": "string",
-                    "description": "起始日期 YYYY-MM-DD（diff 操作使用）",
+                    "description": "起始日期（diff）",
                 },
                 "to": {
                     "type": "string",
-                    "description": "结束日期 YYYY-MM-DD（diff 操作使用）",
+                    "description": "结束日期（diff）",
                 },
                 "date": {
                     "type": "string",
-                    "description": "日期 YYYY-MM-DD（weekday/add 操作使用）",
+                    "description": "日期（weekday/add）",
                 },
                 "days": {
                     "type": "integer",
-                    "description": "天数（add 操作使用，可为负数）",
+                    "description": "天数，可负数",
                 },
             },
             "required": ["action"],

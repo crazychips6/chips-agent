@@ -137,9 +137,7 @@ def build_sub_agent(
 
     sub.session_db = session_db or parent.session_db
     if sub.session_db and session_id:
-        sub.session_id = sub.session_db.create_session(
-            parent_session_id=session_id,
-        )
+        sub.session_id = sub.session_db.create_session()
 
     return sub, final_task, max_iterations
 
@@ -188,41 +186,36 @@ DELEGATE_SCHEMA = {
     "function": {
         "name": "delegate_task",
         "description": (
-            "将子任务委派给一个独立的子 Agent 执行，返回执行结果。\n\n"
-            "两种使用方式：\n\n"
-            "1. 注册表 Agent（推荐）：\n"
-            '   delegate_task({"agent": "researcher", "task": "搜索xxx"})\n'
-            "2. 内联参数：\n"
-            '   delegate_task({"task": "...", "tools": ["web"], "model": "..."})\n'
-            "子 Agent 是独立的 ReAct 循环，有自己的消息历史。"
+            "委派子任务给独立 Agent 执行。两种方式：指定 agent 参数使用注册角色，"
+            "或内联 model/tools 参数。子 Agent 有独立消息历史。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "角色 Agent 名（可选值见 enum，不指定则走内联参数）",
+                    "description": "注册角色名（省略则用内联参数）",
                 },
                 "task": {
                     "type": "string",
-                    "description": "给子 Agent 的任务描述",
+                    "description": "任务描述",
                 },
                 "tools": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "子 Agent 可用的工具集名数组",
+                    "description": "可用工具集",
                 },
                 "model": {
                     "type": "string",
-                    "description": "子 Agent 使用的模型名",
+                    "description": "模型名",
                 },
                 "max_iterations": {
                     "type": "integer",
-                    "description": "子 Agent 的最大迭代次数，默认 10，最大 30",
+                    "description": "最大迭代次数，默认 10，最大 30",
                 },
                 "context": {
                     "type": "string",
-                    "description": "额外上下文（可选）",
+                    "description": "附加上下文",
                 },
             },
         },

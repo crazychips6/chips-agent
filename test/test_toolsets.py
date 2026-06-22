@@ -56,7 +56,7 @@ class TestResolveToolset:
         """core 展开后包含 terminal + file + core 自注册工具。"""
         result = resolve_toolset("core")
         expected = {"terminal",
-                     "file_read", "file_write", "file_search",
+                     "file",
                      "echo", "toolset", "delegate_task", "orchestrate"}
         for tool in expected:
             assert tool in result, f"core 缺少 {tool}"
@@ -71,7 +71,7 @@ class TestResolveToolset:
         """多个工具集合成。"""
         result = resolve_multiple_toolsets(["terminal", "file"])
         assert "terminal" in result
-        assert "file_read" in result
+        assert "file" in result
 
     def test_empty_names(self):
         assert resolve_multiple_toolsets([]) == []

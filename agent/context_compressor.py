@@ -76,8 +76,16 @@ def _tool_summary(tool_name: str, args_str: str, result: str) -> str:
         return f"[write] {args.get('path', '?')} ({line_count} lines)"
     if tool_name in ("edit", "patch"):
         return f"[edit] {args.get('path', '?')} ({len(content)} chars)"
-    if tool_name in ("web_search", "web_fetch"):
-        return f"[{tool_name}] ({len(content)} chars)"
+    if tool_name == "file":
+        action = args.get("action", "read")
+        path = args.get("path", "?")
+        if action == "write":
+            return f"[file/write] {path} ({line_count} lines)"
+        if action == "search":
+            return f"[file/search] {path} ({len(content)} chars)"
+        return f"[file/read] {path} ({len(content)} chars)"
+    if tool_name == "web":
+        return f"[web/{args.get('action', '?')}] ({len(content)} chars)"
     if tool_name == "memory":
         return f"[memory] {args.get('action', '?')}"
     # fallback
