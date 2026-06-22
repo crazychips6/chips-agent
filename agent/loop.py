@@ -102,6 +102,7 @@ class AIAgent:
         # ── 自动路由规划（由 cli.py 在启动时注入 RuleEngine） ──
         self.auto_plan: bool = False
         self._rule_engine: Any = None  # rules.engine.RuleEngine
+        self._llm_router: Any = None   # rules.llm_router.LLMRouter
 
     def interrupt(self):
         """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
@@ -233,9 +234,15 @@ class AIAgent:
         if action == "delegate":
             return self._auto_delegate(user_message, decision.target)
 
-        if action in ("handoff", "orchestrate", "llm_router"):
+        if action == "llm_router":
+            return self._auto_llm_route(user_message)
+
+        if action == "orchestrate":
+            return self._auto_orchestrate(user_message, decision)
+
+        if action in ("handoff",):
             logger.info("auto_plan_unsupported action=%s", action)
-            return None  # 暂不支持，回退 ReAct 循环
+            return None
 
         return None
 
@@ -268,6 +275,53 @@ class AIAgent:
             return result
         except Exception:
             logger.exception("auto_delegate_failed agent=%s", agent_name)
+            return None
+
+    # ── LLM Router 执行（由 _execute_auto_plan 触发） ──
+
+    def _auto_llm_route(self, user_message: str) -> str | None:
+        """调用 LLM Router 分析任务并执行路由决策。"""
+        if self._llm_router is None:
+            logger.info("auto_llm_router_unavailable: LLMRouter 未注入")
+            return None
+
+        decision = self._llm_router.route(user_message)
+        logger.info("auto_llm_route action=%s target=%s reason=%s",
+                     decision.action, decision.target, decision.reason[:80])
+
+        if decision.action == "delegate":
+            return self._auto_delegate(user_message, decision.target)
+        if decision.action == "orchestrate":
+            return self._auto_orchestrate(user_message, decision)
+        # direct → 继续走 ReAct 循环
+        return None
+
+    def _auto_orchestrate(self, user_message: str, decision) -> str | None:
+        """执行编排路由决策。"""
+        plan = getattr(decision, "plan", None)
+        if not plan:
+            logger.info("auto_orchestrate_no_plan")
+            return None
+
+        mode = plan.get("mode", "supervisor")
+        steps = plan.get("steps", [])
+        if not steps:
+            logger.info("auto_orchestrate_no_steps")
+            return None
+
+        logger.info("auto_orchestrate_start mode=%s steps=%d", mode, len(steps))
+
+        try:
+            from tool.builtins.orchestrate_tool import _handle as orchestrate_handle
+            result = orchestrate_handle({
+                "mode": mode,
+                "steps": steps,
+                "parallel": plan.get("parallel", True),
+                "goal": user_message,
+            })
+            return result
+        except Exception:
+            logger.exception("auto_orchestrate_failed")
             return None
 
     # ── 主循环 ──

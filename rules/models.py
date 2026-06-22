@@ -124,6 +124,7 @@ class RouteDecision:
     reason: str = ""
     matched_rule: str = ""
     confidence: float = 1.0
+    plan: Any | None = None  # orchestrate 模式的执行计划
 
     def is_route(self) -> bool:
         """是否需要进行路由（非 direct 且非 block）。"""

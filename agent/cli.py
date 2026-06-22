@@ -307,7 +307,7 @@ def main():
     session_db = SessionDB(db_path=".chips/sessions.db")
     agent.session_db = session_db
 
-    # ── 自动路由规划（RuleEngine） ──
+    # ── 自动路由规划（RuleEngine + LLM Router） ──
     use_auto_plan = args.auto_plan and not args.no_auto_plan
     if use_auto_plan:
         from rules.engine import RuleEngine
@@ -319,6 +319,15 @@ def main():
         agent._rule_engine = rule_engine
         logger = get_logger()
         logger.info("rule_engine_loaded rules=%d", len(rule_engine.rules))
+
+        # LLM Router（规则引擎未命中时触发，同进程内无额外调用成本）
+        from rules.llm_router import LLMRouter
+        agent._llm_router = LLMRouter(
+            gateway=agent.gateway,
+            agent_registry=agent_registry,  # noqa: F821
+            model=agent.model,
+        )
+        logger.info("llm_router_loaded")
 
     if args.resume:
         session_id = args.resume if isinstance(args.resume, str) else None
