@@ -99,6 +99,10 @@ class AIAgent:
         # 使用 threading.Event（而非 bool），为未来多线程场景预留
         self._interrupt_requested = threading.Event()
 
+        # ── 自动路由规划（由 cli.py 在启动时注入 RuleEngine） ──
+        self.auto_plan: bool = False
+        self._rule_engine: Any = None  # rules.engine.RuleEngine
+
     def interrupt(self):
         """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
         self._interrupt_requested.set()
@@ -220,6 +224,52 @@ class AIAgent:
         self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
         self.tool_names &= self.registry.tool_names
 
+    # ── 自动路由执行（由 RuleEngine 触发） ──
+
+    def _execute_auto_plan(self, user_message: str, decision) -> str | None:
+        """执行自动路由决策，返回执行结果或 None（走正常 ReAct 循环）。"""
+        action = decision.action
+
+        if action == "delegate":
+            return self._auto_delegate(user_message, decision.target)
+
+        if action in ("handoff", "orchestrate", "llm_router"):
+            logger.info("auto_plan_unsupported action=%s", action)
+            return None  # 暂不支持，回退 ReAct 循环
+
+        return None
+
+    def _auto_delegate(self, user_message: str, agent_name: str) -> str | None:
+        """自动委派子 Agent。"""
+        try:
+            from tool.builtins.agent_tools import build_sub_agent, resolve_agent_config
+        except ImportError:
+            logger.warning("auto_delegate_unavailable: agent_tools 未加载")
+            return None
+
+        try:
+            args = {"agent": agent_name, "task": user_message}
+            config = resolve_agent_config(args, self)
+        except (RuntimeError, ValueError) as e:
+            logger.info("auto_delegate_config_failed name=%s error=%s", agent_name, e)
+            return None
+
+        try:
+            sub, final_task, max_iterations = build_sub_agent(
+                task=user_message,
+                parent=self,
+                **config,
+                session_db=self.session_db,
+                session_id=self.session_id or "",
+            )
+            logger.info("auto_delegate_start agent=%s task=%r", agent_name, final_task[:100])
+            result = sub.run_conversation(final_task, max_iterations=max_iterations)
+            logger.info("auto_delegate_done agent=%s result_len=%d", agent_name, len(result))
+            return result
+        except Exception:
+            logger.exception("auto_delegate_failed agent=%s", agent_name)
+            return None
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
@@ -234,6 +284,18 @@ class AIAgent:
         from agent.logger import set_turn_number
         set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
+
+        # ── 自动路由规划（跳过短回复，复杂任务自动委派） ──
+        if self.auto_plan and self._rule_engine is not None:
+            decision = self._rule_engine.evaluate(user_message)
+            if decision.is_block():
+                logger.info("auto_plan_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
+                return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
+            if decision.is_route():
+                result = self._execute_auto_plan(user_message, decision)
+                if result is not None:
+                    return result
+            # direct → 继续走 ReAct 循环
 
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)

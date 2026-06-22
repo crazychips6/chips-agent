@@ -49,6 +49,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
     parser.add_argument("--no-compress", action="store_true",
                         help="禁用上下文压缩")
+    parser.add_argument("--auto-plan", action="store_true", default=False,
+                        help="启用自动路由规划（RuleEngine）")
+    parser.add_argument("--no-auto-plan", action="store_true", default=False,
+                        help="禁用自动路由规划")
 
     # 子命令：chips config set/get/list
     subparsers = parser.add_subparsers(dest="command")
@@ -102,6 +106,15 @@ def _build_parser() -> argparse.ArgumentParser:
     insight_portrait = insight_sub.add_parser("portrait", help="单会话完整画像")
     insight_portrait.add_argument("session_id", help="会话 ID")
     insight_weekly = insight_sub.add_parser("weekly", help="一键周报")
+
+    # 子命令：chips router list/test/summary/init
+    router_cmd = subparsers.add_parser("router", help="管理路由规则")
+    router_sub = router_cmd.add_subparsers(dest="router_action", required=True)
+    router_sub.add_parser("list", help="列出所有路由规则")
+    router_test = router_sub.add_parser("test", help="运行规则测试用例")
+    router_summary = router_sub.add_parser("summary", help="显示引擎统计")
+    router_init = router_sub.add_parser("init", help="初始化用户路由配置（~/.chips/routing.yaml）")
+    router_reload = router_sub.add_parser("reload", help="重新加载配置后测试")
 
     return parser
 
@@ -164,6 +177,30 @@ def main():
             print(result.format())
         elif args.insight_action == "weekly":
             print(engine.weekly_report().format())
+        return
+
+    if args.command == "router":
+        from rules.engine import RuleEngine
+        engine = RuleEngine(include_defaults=True)
+        if args.router_action == "list":
+            print(f"路由规则 (共 {len(engine.rules)} 条):")
+            for r in engine.rules:
+                print(f"  [{r.priority:4d}] {r.name:30s} → {r.then:20s} # {r.reason}")
+        elif args.router_action == "test":
+            results = engine.test_rules()
+            passed = sum(1 for r in results if r["passed"])
+            for r in results:
+                status = "✅" if r["passed"] else "❌"
+                print(f"  {status} {r['rule']}: expected={r['expected']} got={r['got']} input={r['input'][:50]}")
+            print(f"\n{passed}/{len(results)} 通过")
+        elif args.router_action == "summary":
+            print(engine.summary())
+        elif args.router_action == "init":
+            from rules.loader import write_default_config
+            print(write_default_config())
+        elif args.router_action == "reload":
+            engine.reload()
+            print(f"已重新加载 {len(engine.rules)} 条规则")
         return
 
     if args.version:
@@ -269,6 +306,19 @@ def main():
     # ── Session 持久化 ──
     session_db = SessionDB(db_path=".chips/sessions.db")
     agent.session_db = session_db
+
+    # ── 自动路由规划（RuleEngine） ──
+    use_auto_plan = args.auto_plan and not args.no_auto_plan
+    if use_auto_plan:
+        from rules.engine import RuleEngine
+        rule_engine = RuleEngine(
+            include_defaults=True,
+            tool_names=agent.tool_names,
+        )
+        agent.auto_plan = True
+        agent._rule_engine = rule_engine
+        logger = get_logger()
+        logger.info("rule_engine_loaded rules=%d", len(rule_engine.rules))
 
     if args.resume:
         session_id = args.resume if isinstance(args.resume, str) else None
