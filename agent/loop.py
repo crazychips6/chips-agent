@@ -390,10 +390,16 @@ class AIAgent:
         knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
 
         from tool.toolsets import build_availability_table
+        # 小模型路由模式下：可用工具表只显示实际注入的兜底工具，不展示 toolset 体系
+        if self._local_router is not None and self._local_router.is_available():
+            base = {"bash", "file", "clarify", "intent_query"}
+            avail = "始终可用：" + ", ".join(sorted(base))
+        else:
+            avail = build_availability_table()
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
             timestamp=str(datetime.date.today()),
-            toolset_availability=build_availability_table(),
+            toolset_availability=avail,
             knowledge=knowledge,
         )
         system = (self._frozen_base or "") + "\n\n" + dynamic
