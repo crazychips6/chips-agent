@@ -180,6 +180,78 @@ class LocalRouter:
             logger.warning("local_router_query_tools_failed: %s", exc)
             return {"tools": [], "reasoning": f"query_error: {exc}"}
 
+    # ── Trace 分析（学习用） ──
+
+    _ANALYZE_TRACE_PROMPT = """你是一个 agent 执行分析器。分析完整的工具调用 trace，提取可复用的经验知识。
+
+用户请求: {user_message}
+
+执行步骤:
+{trace_steps}
+
+总步骤数: {total_steps}
+
+返回 JSON：
+{{
+    "task": "任务类型（如：天气查询、代码搜索）",
+    "optimal": "最优执行路径描述（50字以内，下次可直接用）",
+    "waste": ["浪费的操作1", "浪费的操作2"],
+    "tokens_saved_estimate": 估计省了多少 token（整数）
+}}
+
+只返回 JSON。"""
+
+    def analyze_trace(self, trace: dict) -> dict:
+        """分析 trace，提取最优路径和失败模式。"""
+        steps = []
+        for i, tc in enumerate(trace.get("tool_calls", []), 1):
+            name = tc.get("name", "?")
+            args = tc.get("args", "{}")
+            result_preview = (tc.get("result", "") or "")[:120]
+            steps.append(f"  Step {i}: {name}({args})")
+            if result_preview:
+                steps.append(f"    → {result_preview}")
+
+        trace_steps = "\n".join(steps)
+        prompt = self._ANALYZE_TRACE_PROMPT.format(
+            user_message=(trace.get("user_message", "") or "")[:200],
+            trace_steps=trace_steps,
+            total_steps=trace.get("total_steps", 0),
+        )
+
+        payload = json.dumps({
+            "model": self.MODEL,
+            "messages": [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": "分析以上 trace。"},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 256},
+        }).encode()
+
+        req = urllib.request.Request(
+            f"{self.OLLAMA_BASE}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=15)
+            body = json.loads(resp.read())
+            content = body.get("message", {}).get("content", "")
+            content = content.strip()
+            if content.startswith("```"):
+                lines = content.split("\n")
+                content = "\n".join(lines[1:-1]) if len(lines) > 2 else lines[-1]
+            result = json.loads(content)
+            if not isinstance(result, dict) or "task" not in result:
+                raise ValueError("missing 'task' field")
+            return result
+        except Exception as exc:
+            logger.warning("local_router_analyze_trace_failed: %s", exc)
+            return {"task": "unknown", "optimal": "", "waste": [], "tokens_saved_estimate": 0}
+
     # ── 快捷查询 ──
 
     @staticmethod

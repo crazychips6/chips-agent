@@ -412,6 +412,59 @@ class AIAgent:
         self._save_pending()
         return system
 
+    # ── Trace 收集（供小模型学习用） ──
+
+    def _collect_trace(self, user_message: str, final_reply: str):
+        """从本轮 messages 中提取 tool_call 序列，写入 history/ 供后续分析。"""
+        tool_calls = []
+        for msg in self.messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    tool_calls.append({
+                        "name": tc["function"]["name"],
+                        "args": tc["function"]["arguments"],
+                    })
+            elif msg.get("role") == "tool" and tool_calls and "result" not in tool_calls[-1]:
+                tool_calls[-1]["result"] = (msg.get("content", "") or "")[:300]
+
+        if len(tool_calls) < 2:
+            return None
+
+        trace = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "user_message": user_message[:500],
+            "final_reply": (final_reply or "")[:500],
+            "tool_calls": tool_calls,
+            "total_steps": len(tool_calls),
+        }
+        history_dir = os.path.expanduser("~/.chips/knowledge/history")
+        os.makedirs(history_dir, exist_ok=True)
+        fname = f"{datetime.date.today()}-{int(time.time())}.json"
+        with open(os.path.join(history_dir, fname), "w", encoding="utf-8") as f:
+            json.dump(trace, f, ensure_ascii=False, indent=2)
+        return trace
+
+    def _analyze_and_learn(self, user_message: str, final_reply: str):
+        """小模型分析本轮 trace → staging（串联 T2 + T3）。"""
+        trace = self._collect_trace(user_message, final_reply)
+        if trace is None:
+            return
+        if self._local_router is None or not self._local_router.is_available():
+            return
+
+        from knowledge.manager import KnowledgeManager
+        if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
+            self._knowledge_manager = KnowledgeManager()
+
+        analysis = self._local_router.analyze_trace(trace)
+        if not analysis.get("optimal"):
+            return
+
+        staging_id = self._knowledge_manager.save_to_staging(analysis)
+        if staging_id:
+            logger.info("knowledge_learned id=%s task=%s optimal=%s",
+                         staging_id, analysis.get("task"), analysis.get("optimal", "")[:40])
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
@@ -678,6 +731,8 @@ class AIAgent:
                 pass
             self.memory_manager.sync_all(user_message, last_text_reply or "", session_id=self.session_id)
             self.memory_manager.on_session_end(self.messages)
+            self._collect_trace(user_message, last_text_reply)
+            self._analyze_and_learn(user_message, last_text_reply)
             if self.plugin_manager:
                 self.plugin_manager.dispatch_session_end(self.messages)
 
