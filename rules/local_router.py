@@ -30,8 +30,14 @@ _INTENT_PROMPT = """你是一个意图识别助手。分析用户最近一条消
 工具列表（仅 new_task 时填写可能需要的工具，最多2个最相关的）：
 - bash：执行 shell 命令、查系统信息、运行脚本
 - file：读取、编辑、搜索文件代码
-- web：搜索网页、获取网页内容
+- web：搜索网页、获取网页内容（**天气、新闻、百科、最新信息** 都需要 web）
 - skills：执行已注册的技能
+
+示例：
+  用户说"上海天气" → type=new_task, tools=["web"]
+  用户说"当前目录"  → type=new_task, tools=["bash"]
+  用户说"读 README" → type=new_task, tools=["file"]
+  用户说"查一下"     → type=continuing（太模糊，让主 LLM 接着处理）
 
 simple_greeting 时填写友好的 direct_reply。
 不要输出其他内容，不要用 markdown 代码块，只返回 JSON。"""
