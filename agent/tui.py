@@ -22,6 +22,13 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
+try:
+    from rich.console import Console
+    from rich.syntax import Syntax
+    _RICH_AVAILABLE = True
+except ImportError:
+    _RICH_AVAILABLE = False
+
 if TYPE_CHECKING:
     from agent.loop import AIAgent
 
@@ -37,9 +44,6 @@ _RST = "\033[0m"
 
 # ── 圆环符号 ──
 _SOLID = "●"               # U+25CF  非聚焦段落
-_HOLLOW = "○"              # U+25CB  聚焦段落（配合 ANSI blink）
-_BLINK = "\033[5m"
-_BLINK_OFF = "\033[25m"
 
 _ANSI_RE = re.compile(r'\033\[[0-9;]*m')
 
@@ -126,31 +130,12 @@ class FocusTracker:
         self._stack: list[_FocusNode] = []
         self._cursor_height = 0  # 当前节点累计的物理行数
 
-    # ── 内部：覆写某行首列 ──
-
-    def _overwrite(self, line_offset: int, new_text: str) -> None:
-        """从当前光标位置向上移动 line_offset 行，覆写行首，再移回原位。"""
-        if line_offset <= 0:
-            return
-        sys.stdout.write(f"\033[{line_offset}A\r{new_text}\033[{line_offset}B\r")
-        sys.stdout.flush()
-
     # ── 段落开始 ──
 
     def begin(self, indent: int, inline: str = "") -> None:
-        """开始一个新聚焦段落。
-
-        Args:
-            indent: ●/○ 的缩进格数
-            inline: 跟在 ○ 后的同后内容（如 " chips"）
-        """
-        # 关闭栈顶的 blink
-        if self._stack:
-            top = self._stack[-1]
-            self._overwrite(top.height, " " * top.indent + _SOLID)
-
+        """开始一个新段落。直接用 ●，不做空心→实心动画。"""
         margin = " " * indent
-        sys.stdout.write(f"{margin}{_BLINK}{_HOLLOW}{_BLINK_OFF}{inline}")
+        sys.stdout.write(f"{margin}{_SOLID}{inline}")
         sys.stdout.flush()
         self._stack.append(_FocusNode(indent=indent, height=1))
         self._cursor_height = 1
@@ -187,15 +172,9 @@ class FocusTracker:
     # ── 段落结束 ──
 
     def end(self) -> None:
-        """结束当前聚焦段落。覆写 ○ 为 ●，恢复父段落 blink。"""
-        if not self._stack:
-            return
-        node = self._stack.pop()
-        self._overwrite(node.height, " " * node.indent + _SOLID)
-        # 恢复父段落 blink
+        """结束当前段落。直接弹栈，无需覆写。"""
         if self._stack:
-            parent = self._stack[-1]
-            self._overwrite(parent.height, " " * parent.indent + _BLINK + _HOLLOW + _BLINK_OFF)
+            self._stack.pop()
 
     # ── 异常清理 ──
 
@@ -298,24 +277,61 @@ class TUI:
             if not state.started:
                 state.started = True
                 sys.stdout.write("\n")
-                # chips 标签直接静态输出，不用 focus tracker（避免流式行数追踪不准）
-                sys.stdout.write(f" {_ACCENT}○ chips{_RST}\n")
+                # 直接用 ●（不做 ○→● 覆写，行数追踪不可靠）
+                sys.stdout.write(f" {_ACCENT}● chips{_RST}\n")
             state.buffer += chunk
-            # 流式写入，无缓冲直接输出（不支持折行，以保留流式感）
             sys.stdout.write(chunk)
             sys.stdout.flush()
 
         def _on_tool(name: str, args: dict, result: str | None):
+            # ── clarify 工具：不走 FocusTracker（由 ChoicePicker 管理） ──
+            if name == "clarify":
+                if result is None:
+                    sys.stdout.write("\n")
+                    args_preview = json_preview(args)
+                    sys.stdout.write(f"  {_TOOL}🛠 clarify({args_preview}){_RST}\n")
+                    sys.stdout.flush()
+                else:
+                    try:
+                        import json
+                        data = json.loads(result)
+                        answer = data.get("user_response", "")
+                    except Exception:
+                        answer = str(result)[:100]
+                    sys.stdout.write(f"  {_DIM}│ {answer}{_RST}\n")
+                    sys.stdout.flush()
+                return
+
+            # ── 其他工具：正常 FocusTracker 流程 ──
             if result is None:
-                # 工具开始 → 打印 ○ 🛠
+                sys.stdout.write("\n")
                 args_preview = json_preview(args)
                 self._focus.begin(2, f" {_TOOL}🛠 {name}({args_preview}){_RST}")
                 sys.stdout.write("\n")
                 sys.stdout.flush()
             else:
-                # 工具返回 → 打印结果预览 → 关闭聚焦
-                preview = result[:200].replace("\n", " ")
-                self._focus.writeln(f"{_DIM}│ {preview}{_RST}", indent=4)
+                lines = result.split("\n")[:5]
+                if "```" in lines[0] and _RICH_AVAILABLE:
+                    lang = lines[0].removeprefix("```").strip()
+                    code = "\n".join(l for l in lines[1:] if not l.strip().startswith("```"))
+                    try:
+                        from rich.syntax import Syntax
+                        from rich.console import Console
+                        import io
+                        buf = io.StringIO()
+                        Console(file=buf, width=shutil.get_terminal_size().columns - 6).print(
+                            Syntax(code, lang or "text", theme="monokai", background_color="default",
+                                   line_numbers=False, word_wrap=True)
+                        )
+                        preview = buf.getvalue().rstrip()
+                        for pl in preview.split("\n"):
+                            self._focus.writeln(f"{_DIM}{pl}{_RST}", indent=4)
+                    except Exception:
+                        for line in lines:
+                            self._focus.writeln(f"{_DIM}│ {line}{_RST}", indent=4)
+                else:
+                    for line in lines:
+                        self._focus.writeln(f"{_DIM}│ {line}{_RST}", indent=4)
                 self._focus.end()
 
         try:

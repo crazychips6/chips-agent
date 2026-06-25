@@ -132,10 +132,7 @@ TODO_SCHEMA = {
     "type": "function",
     "function": {
         "name": "todo",
-        "description": (
-            "管理会话任务列表：传 todos 写入/更新（merge=true 合并，"
-            "false=替换），省略则读取。每条含 id/content/status。"
-        ),
+        "description": "管理会话任务列表（写入/更新/读取）",
         "parameters": {
             "type": "object",
             "properties": {

@@ -93,18 +93,18 @@ registry.register(
         "type": "function",
         "function": {
             "name": "toolset",
-            "description": "管理延迟加载工具集：启用/禁用/查看。可用工具集在 system prompt 中枚举。启用后**当前轮即可使用**，永久有效直到禁用。",
+            "description": "管理延迟加载工具集（启用/禁用/查看）",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["list", "enable", "disable"],
-                        "description": "list=查看状态, enable=启用, disable=禁用",
+                        "description": "list/enable/disable",
                     },
                     "name": {
                         "type": "string",
-                        "description": "工具集名（enable/disable 时需要）",
+                        "description": "工具集名（enable/disable）",
                     },
                 },
                 "required": ["action"],

@@ -307,7 +307,7 @@ WEB_SCHEMA = {
     "type": "function",
     "function": {
         "name": "web",
-        "description": "网页获取与搜索。action=fetch 获取 URL 内容，action=search 搜索互联网。",
+        "description": "获取网页或搜索互联网",
         "parameters": {
             "type": "object",
             "properties": {

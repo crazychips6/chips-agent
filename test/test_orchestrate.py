@@ -39,7 +39,7 @@ def mock_registry():
                 "pool_size": 3,
             },
             "coder": {
-                "model": "deepseek-chat", "tools": ["terminal", "file"],
+                "model": "deepseek-chat", "tools": ["bash", "file"],
                 "max_iterations": 15, "system_prompt": "编程助手",
             },
             "reviewer": {

@@ -390,12 +390,7 @@ SYSTEM_INFO_SCHEMA = {
     "type": "function",
     "function": {
         "name": "system_info",
-        "description": (
-            "获取当前系统的详细信息：操作系统版本、CPU 型号与核心数、"
-            "内存使用情况（总量/已用/可用/使用率）、磁盘使用情况、"
-            "系统运行时间、Python 版本。"
-            "支持 Linux 和 Windows。不需要任何参数。"
-        ),
+        "description": "获取系统信息（OS/CPU/内存/磁盘/Python）",
         "parameters": {
             "type": "object",
             "properties": {},

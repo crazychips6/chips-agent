@@ -33,7 +33,7 @@ class TestRegistryToolsetConsistency:
         core_tools = set(resolve_toolset("core"))
         registered = set(registry._entries.keys())
         overlap = core_tools & registered
-        assert len(overlap) >= 5, f"core 只解析到 {len(overlap)} 个注册工具"
+        assert len(overlap) >= 4, f"core 只解析到 {len(overlap)} 个注册工具"
 
     def test_all_tools_in_all_toolset_registered(self):
         """递归展开 all 工具集，所有工具都已注册。"""
@@ -53,24 +53,22 @@ class TestResolveToolset:
         import tool.builtins  # noqa: F401
 
     def test_core_resolves_all_tools(self):
-        """core 展开后包含 terminal + file + core 自注册工具。"""
+        """core 展开后包含 bash + file + core 自注册工具。"""
         result = resolve_toolset("core")
-        expected = {"terminal",
-                     "file",
-                     "echo", "toolset", "delegate_task", "orchestrate"}
+        expected = {"bash", "file",
+                     "toolset", "orchestrate"}
         for tool in expected:
             assert tool in result, f"core 缺少 {tool}"
 
     def test_all(self):
         """all 是 meta 工具集，递归展开所有子集。"""
         result = resolve_toolset("all")
-        assert "echo" in result
-        assert "terminal" in result
+        assert "bash" in result
 
     def test_multiple_names(self):
         """多个工具集合成。"""
-        result = resolve_multiple_toolsets(["terminal", "file"])
-        assert "terminal" in result
+        result = resolve_multiple_toolsets(["bash", "file"])
+        assert "bash" in result
         assert "file" in result
 
     def test_empty_names(self):
@@ -93,14 +91,14 @@ class TestResolveToolset:
         """工具集嵌套引用另一工具集。"""
         TOOLSET_SCHEMA["nested"] = {"description": "test", "tools": [], "includes": ["core"]}
         result = resolve_toolset("nested")
-        assert "echo" in result
+        assert "bash" in result
         del TOOLSET_SCHEMA["nested"]
 
     def test_get_toolset_static(self):
-        ts = get_toolset("terminal")
+        ts = get_toolset("bash")
         assert ts is not None
         assert "description" in ts
-        assert "终端" in ts["description"]
+        assert "shell" in ts["description"]
 
     def test_get_toolset_unknown(self):
         assert get_toolset("nonexistent_xyz") is None

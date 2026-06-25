@@ -51,23 +51,23 @@ def _execute_handler(args) -> str:
 
 
 registry.register(
-    name="terminal",
-    toolset="terminal",
+    name="bash",
+    toolset="bash",
     schema={
         "type": "function",
         "function": {
-            "name": "terminal",
-            "description": "在终端中执行一条命令，返回标准输出和标准错误",
+            "name": "bash",
+            "description": "执行 shell 命令",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "要执行的命令",
+                        "description": "命令",
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "超时秒数，默认 30",
+                        "description": "超时秒数",
                     },
                 },
                 "required": ["command"],

@@ -156,7 +156,7 @@ _SKILL_TOOLS = [
             "type": "function",
             "function": {
                 "name": "skills_list",
-                "description": "列出所有可用技能的 name 和 description（不含完整内容）。按 skill 名称排序。",
+                "description": "列出所有可用技能（名称和描述）",
                 "parameters": {"type": "object", "properties": {}},
             },
         },
@@ -168,7 +168,7 @@ _SKILL_TOOLS = [
             "type": "function",
             "function": {
                 "name": "skill_view",
-                "description": "加载指定技能的完整 markdown 内容。SKILL.md 包含流程说明。调用前先用 skills_list 确认技能存在。",
+                "description": "加载指定技能的完整 markdown 内容",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -186,7 +186,7 @@ _SKILL_TOOLS = [
             "type": "function",
             "function": {
                 "name": "skill_manage",
-                "description": "管理技能：创建新技能（create）或删除已有技能（delete）。编辑请先 view → 修改 → delete + create。",
+                "description": "管理技能（创建/删除）",
                 "parameters": {
                     "type": "object",
                     "properties": {

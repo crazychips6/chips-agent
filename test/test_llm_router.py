@@ -27,7 +27,7 @@ def _make_registry(agents: list[dict] | None = None):
     else:
         reg.list.return_value = [
             {"name": "researcher", "description": "搜索研究助手", "tools": ["web"]},
-            {"name": "coder", "description": "编程实现助手", "tools": ["terminal", "file"]},
+            {"name": "coder", "description": "编程实现助手", "tools": ["bash", "file"]},
         ]
     return reg
 

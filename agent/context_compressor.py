@@ -65,11 +65,11 @@ def _tool_summary(tool_name: str, args_str: str, result: str) -> str:
     content = result or ""
     line_count = content.count("\n") + 1 if content.strip() else 0
 
-    if tool_name == "terminal":
+    if tool_name == "bash":
         cmd = args.get("command", "")
         if len(cmd) > 60:
             cmd = cmd[:57] + "..."
-        return f"[terminal] `{cmd}` ({line_count} lines)"
+        return f"[bash] `{cmd}` ({line_count} lines)"
     if tool_name in ("read", "read_file"):
         return f"[read] {args.get('path', '?')} ({len(content)} chars)"
     if tool_name in ("write", "write_file"):

@@ -44,8 +44,8 @@ class TestHelpers:
         ]
         assert _rough_tokens(msgs) > 0
 
-    def test_tool_summary_terminal(self):
-        result = _tool_summary("terminal", '{"command": "npm test"}', "line1\nline2\nline3")
+    def test_tool_summary_bash(self):
+        result = _tool_summary("bash", '{"command": "npm test"}', "line1\nline2\nline3")
         assert "npm test" in result
         assert "3 lines" in result
 

@@ -306,7 +306,7 @@ FILE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "file",
-        "description": "文件操作：read（读取）、write（写入/追加/替换）、search（搜索文本）。",
+        "description": "读/写/搜索文件",
         "parameters": {
             "type": "object",
             "properties": {

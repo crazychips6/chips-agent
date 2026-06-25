@@ -352,10 +352,7 @@ PROCESS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "process",
-        "description": (
-            "进程管理。支持 list（列出）、get（详情）、kill（终止）。"
-            "kill 需安全审批。"
-        ),
+        "description": "管理进程（列表/详情/终止）",
         "parameters": {
             "type": "object",
             "properties": {

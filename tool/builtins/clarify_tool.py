@@ -68,10 +68,7 @@ CLARIFY_SCHEMA = {
     "type": "function",
     "function": {
         "name": "clarify",
-        "description": (
-            "向用户追问澄清。支持多选（传 choices，最多 4 项）和开放输入两种模式。"
-            "仅在任务有歧义或需用户决策时使用。"
-        ),
+        "description": "向用户追问澄清",
         "parameters": {
             "type": "object",
             "properties": {
