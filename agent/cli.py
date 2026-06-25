@@ -509,6 +509,50 @@ def main():
         )
     cmd_reg.register("rewind", _cmd_rewind, "回退 N 轮对话（如 /rewind 3）")
 
+    # ── /knowledge — 经验知识审核 ──
+    def _cmd_knowledge(args: list[str]) -> str | None:
+        from knowledge.manager import KnowledgeManager as _KM
+        km = _KM()
+        # REPL 传参是单字符串，需要自行 split
+        raw = args[0] if args else ""
+        parts = raw.split(maxsplit=1) if raw else []
+        sub = parts[0] if parts else "review"
+        target = parts[1] if len(parts) > 1 else ""
+
+        if sub == "review":
+            pending = km.list_staging()
+            if not pending:
+                return "📋 没有待审核的知识条目"
+            lines = [f"📋 待审核知识（{len(pending)} 条）\n"]
+            for p in pending:
+                lines.append(f"  [{p['id']}]")
+                lines.append(f"    任务: {p['task']}")
+                lines.append(f"    建议: {p.get('inject', '')}")
+                waste = p.get("avoid", "")
+                if waste:
+                    lines.append(f"    避免: {waste}")
+                lines.append("")
+            lines.append("用法：/knowledge approve <id> | /knowledge reject <id>")
+            return "\n".join(lines)
+
+        if sub == "approve":
+            if not target:
+                return "⚠ 用法：/knowledge approve <id>"
+            ok = km.approve_staging(target)
+            if ok:
+                km.git_commit(f"approve: {target}")
+                return f"✅ 已批准 {target}"
+            return f"⚠ 未找到或批准失败：{target}"
+
+        if sub == "reject":
+            if not target:
+                return "⚠ 用法：/knowledge reject <id>"
+            ok = km.reject_staging(target)
+            return f"✅ 已拒绝 {target}" if ok else f"⚠ 未找到：{target}"
+
+        return "⚠ 用法：/knowledge review | /knowledge approve <id> | /knowledge reject <id>"
+    cmd_reg.register("knowledge", _cmd_knowledge, "管理经验知识（review / approve / reject）")
+
     loop = ReplLoop(
         agent=agent,
         input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
