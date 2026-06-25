@@ -342,6 +342,18 @@ def main():
     # ── 自动路由规划（RuleEngine + LLM Router） ──
     _wire_auto_plan(agent, args, agent_registry)
 
+    # ── 端侧小模型路由（独立于 --auto-plan，始终尝试注入） ──
+    from rules.local_router import LocalRouter
+    agent._local_router = LocalRouter()
+    logger = get_logger()
+    if agent._local_router.is_available():
+        logger.info("local_router_loaded model=%s", LocalRouter.MODEL)
+    else:
+        logger.info("local_router_disabled: Ollama 不可访问，走原路径")
+    # intent_query 工具需要 _local_router 已注入才能接线
+    from tool.builtins.intent_query_tool import wire_agent as wire_intent_query
+    wire_intent_query(agent)
+
     if args.resume:
         session_id = args.resume if isinstance(args.resume, str) else None
         if not session_id:

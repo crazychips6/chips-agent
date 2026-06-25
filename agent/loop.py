@@ -73,6 +73,8 @@ class AIAgent:
         self.permanent_toolsets: list[str] = []
         # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
         self._extra_tool_names: set[str] = set()
+        # 端侧小模型预选的工具（LocalRouter 注入，每轮重置）
+        self._intent_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
         # 插件管理器，由 cli.py 在启动时初始化注入
         self.plugin_manager: PluginManager | None = None
@@ -105,6 +107,7 @@ class AIAgent:
         self.auto_plan: bool = False
         self._rule_engine: Any = None  # rules.engine.RuleEngine
         self._llm_router: Any = None   # rules.llm_router.LLMRouter
+        self._local_router: Any = None  # rules.local_router.LocalRouter
 
     def interrupt(self):
         """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
@@ -221,10 +224,18 @@ class AIAgent:
         if not self.registry:
             return
         from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
-        core_tools = CORE_ALWAYS_ON & self.registry.tool_names
-        active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
-        perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
-        self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
+
+        if self._local_router is not None and self._local_router.is_available():
+            # ── 端侧模型路由模式：基础兜底 + 小模型注入 + 插件/MCP ──
+            base = {"bash", "file", "clarify", "intent_query"} & self.registry.tool_names
+            self.tool_names = base | self._intent_tool_names | self._extra_tool_names
+        else:
+            # ── 原始模式：CORE + active + permanent + extra ──
+            core_tools = CORE_ALWAYS_ON & self.registry.tool_names
+            active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
+            perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
+            self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
+
         self.tool_names &= self.registry.tool_names
 
     # ── 自动路由执行（由 RuleEngine 触发） ──
@@ -340,6 +351,7 @@ class AIAgent:
         from agent.logger import set_turn_number
         set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
+        self._intent_tool_names = set()  # 重置上一轮的工具注入
 
         # ── 自动路由规划（跳过短回复，复杂任务自动委派） ──
         if self.auto_plan and self._rule_engine is not None:
@@ -352,6 +364,22 @@ class AIAgent:
                 if result is not None:
                     return result
             # direct → 继续走 ReAct 循环
+
+        # ── 端侧小模型路由（仅当可用时，节省主线 LLM token） ──
+        if self._local_router is not None and self._local_router.is_available():
+            intent = self._local_router.detect(user_message)
+            if self._local_router.is_simple_greeting(intent):
+                reply = intent.get("direct_reply", "你好！")
+                reply += " \033[38;2;100;100;120m[端侧]\033[0m"
+                self.messages.append({"role": "user", "content": user_message})
+                self.messages.append({"role": "assistant", "content": reply})
+                logger.info("local_router: simple_greeting reply=%s", reply[:60])
+                return reply
+            if self._local_router.is_new_task(intent):
+                intent_tools = intent.get("tools", [])
+                if intent_tools:
+                    self._intent_tool_names = set(intent_tools)
+                    logger.info("local_router: new_task tools=%s", intent_tools)
 
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
