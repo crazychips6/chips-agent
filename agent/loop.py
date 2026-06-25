@@ -337,6 +337,72 @@ class AIAgent:
             logger.exception("auto_orchestrate_failed")
             return None
 
+    # ── 路由决策 ──
+
+    def _pre_route(self, user_message: str) -> str | None:
+        """路由前置判断：RuleEngine + 端侧小模型，拦截可直接回复的消息。
+
+        Returns:
+            str  — 直接回复内容（不走主 LLM）
+            None — 继续走 ReAct 循环
+        """
+        # RuleEngine 自动路由（安全拦截 / 委派子 Agent / 编排）
+        if self.auto_plan and self._rule_engine is not None:
+            decision = self._rule_engine.evaluate(user_message)
+            if decision.is_block():
+                logger.info("auto_plan_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
+                return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
+            if decision.is_route():
+                result = self._execute_auto_plan(user_message, decision)
+                if result is not None:
+                    return result
+            # direct → 继续
+
+        # 端侧小模型路由（问候直答 / 工具注入）
+        if self._local_router is not None and self._local_router.is_available():
+            intent = self._local_router.detect(user_message)
+            if self._local_router.is_simple_greeting(intent):
+                reply = intent.get("direct_reply", "你好！")
+                reply += " \033[38;2;100;100;120m[端侧]\033[0m"
+                self.messages.append({"role": "user", "content": user_message})
+                self.messages.append({"role": "assistant", "content": reply})
+                logger.info("local_router: simple_greeting reply=%s", reply[:60])
+                return reply
+            if self._local_router.is_new_task(intent):
+                intent_tools = intent.get("tools", [])
+                if intent_tools:
+                    self._intent_tool_names = set(intent_tools)
+                    logger.info("local_router: new_task tools=%s", intent_tools)
+        return None
+
+    # ── 对话准备 ──
+
+    def _prepare_conversation(self, user_message: str) -> str:
+        """构建 system prompt + 初始化本轮对话环境。返回 system prompt 字符串。"""
+        self._ensure_cache()
+        prefetch = self.memory_manager.prefetch_all(user_message)
+        from tool.toolsets import build_availability_table
+        dynamic = self.prompt_builder.build_dynamic(
+            prefetch=prefetch,
+            timestamp=str(datetime.date.today()),
+            toolset_availability=build_availability_table(),
+        )
+        system = (self._frozen_base or "") + "\n\n" + dynamic
+        self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
+
+        self.memory_manager.initialize_all(session_id=self.session_id)
+        self._tool_call_history = defaultdict(int)
+        self._consecutive_failures = 0
+
+        if self.debug_context:
+            os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
+            with open(_DEBUG_LOG, "w") as f:
+                json.dump([], f)
+
+        os.environ["CHIPS_SESSION_ID"] = self.session_id
+        self._save_pending()
+        return system
+
     # ── 主循环 ──
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
@@ -353,68 +419,17 @@ class AIAgent:
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
         self._intent_tool_names = set()  # 重置上一轮的工具注入
 
-        # ── 自动路由规划（跳过短回复，复杂任务自动委派） ──
-        if self.auto_plan and self._rule_engine is not None:
-            decision = self._rule_engine.evaluate(user_message)
-            if decision.is_block():
-                logger.info("auto_plan_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
-                return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
-            if decision.is_route():
-                result = self._execute_auto_plan(user_message, decision)
-                if result is not None:
-                    return result
-            # direct → 继续走 ReAct 循环
+        # 阶段一：路由决策（RuleEngine + 端侧小模型）
+        reply = self._pre_route(user_message)
+        if reply is not None:
+            return reply
 
-        # ── 端侧小模型路由（仅当可用时，节省主线 LLM token） ──
-        if self._local_router is not None and self._local_router.is_available():
-            intent = self._local_router.detect(user_message)
-            if self._local_router.is_simple_greeting(intent):
-                reply = intent.get("direct_reply", "你好！")
-                reply += " \033[38;2;100;100;120m[端侧]\033[0m"
-                self.messages.append({"role": "user", "content": user_message})
-                self.messages.append({"role": "assistant", "content": reply})
-                logger.info("local_router: simple_greeting reply=%s", reply[:60])
-                return reply
-            if self._local_router.is_new_task(intent):
-                intent_tools = intent.get("tools", [])
-                if intent_tools:
-                    self._intent_tool_names = set(intent_tools)
-                    logger.info("local_router: new_task tools=%s", intent_tools)
+        # 阶段二：对话准备（system prompt + memory 预热）
+        system = self._prepare_conversation(user_message)
 
-        self._ensure_cache()
-        prefetch = self.memory_manager.prefetch_all(user_message)
-        from tool.toolsets import build_availability_table
-        dynamic = self.prompt_builder.build_dynamic(
-            prefetch=prefetch,
-            timestamp=str(datetime.date.today()),
-            toolset_availability=build_availability_table(),
-        )
-        system = (self._frozen_base or "") + "\n\n" + dynamic
-        self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
-
-        # 初始化记忆提供者（建库、连接等）
-        self.memory_manager.initialize_all(session_id=self.session_id)
-
-        # 重置工具循环检测
-        self._tool_call_history = defaultdict(int)
-        # 重置连续失败计数器
-        self._consecutive_failures = 0
-
-        # debug_context 日志
-        if self.debug_context:
-            os.makedirs(os.path.dirname(_DEBUG_LOG), exist_ok=True)
-            with open(_DEBUG_LOG, "w") as f:
-                json.dump([], f)
-
-        # 注入 session_id 到环境变量，供 Langfuse 插件使用
-        os.environ["CHIPS_SESSION_ID"] = self.session_id
-
-        self._save_pending()
-
+        # 阶段三：ReAct 循环
         rounds = [] if self.debug_context else None
         last_text_reply = None
-
-        # ReAct 循环
         try:
             for iteration in range(max_iterations):
                 # 中断检查 ①：每次迭代开始
@@ -470,7 +485,6 @@ class AIAgent:
 
                 # LLM 调用（通过 gateway，内部处理 retry/streaming）
                 _llm_t0 = time.time()
-                llm_ok = False
                 if self.stream:
                     _on_chunk = chunk_callback or (lambda c: print(c, end="", flush=True))
                     _buf: list[str] = []  # 仅用于事后安全检查，不影响实时输出
@@ -492,7 +506,6 @@ class AIAgent:
                         messages=api_messages, model=self.model,
                         max_tokens=4096, tools=tools if tools else None,
                     )
-                llm_ok = True
                 _llm_duration = int((time.time() - _llm_t0) * 1000)
                 # LLM 调用后钩子（给 observability 插件用）
                 if self.plugin_manager:
