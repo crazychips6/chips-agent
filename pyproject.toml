@@ -48,6 +48,7 @@ include = [
     "gateway*",
     "plugins*",
     "web*",
+    "knowledge*",
     "rules*",
     "test*",
 ]

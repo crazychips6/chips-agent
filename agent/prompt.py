@@ -299,16 +299,19 @@ class PromptBuilder:
         prefetch: str = "",
         timestamp: str = "",
         toolset_availability: str = "",
+        knowledge: str = "",
     ) -> str:
         """动态层 —— 每轮重建，量很小。
 
-        包含实时检索结果、当前时间戳和工具集可用性表。
+        包含实时检索结果、当前时间戳、经验知识和工具集可用性表。
         """
         parts = []
         if timestamp:
             parts.append(f"# 当前日期\n{timestamp}")
         if prefetch:
             parts.append(f"# 实时上下文\n{prefetch.strip()}")
+        if knowledge:
+            parts.append(knowledge.strip())
         if toolset_availability:
             parts.append(f"# 可用工具集\n{toolset_availability.strip()}")
         return "\n\n".join(parts)

@@ -381,11 +381,20 @@ class AIAgent:
         """构建 system prompt + 初始化本轮对话环境。返回 system prompt 字符串。"""
         self._ensure_cache()
         prefetch = self.memory_manager.prefetch_all(user_message)
+
+        # 经验知识匹配（技巧类，非事实）
+        from knowledge.manager import KnowledgeManager
+        if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
+            self._knowledge_manager = KnowledgeManager()
+        knowledge_entries = self._knowledge_manager.match(user_message)
+        knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
+
         from tool.toolsets import build_availability_table
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
             timestamp=str(datetime.date.today()),
             toolset_availability=build_availability_table(),
+            knowledge=knowledge,
         )
         system = (self._frozen_base or "") + "\n\n" + dynamic
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
