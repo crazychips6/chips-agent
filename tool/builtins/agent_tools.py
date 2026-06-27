@@ -161,23 +161,41 @@ def _handle(args: dict[str, Any]) -> str:
     except (RuntimeError, ValueError) as e:
         return json.dumps({"error": str(e)})
 
-    sub, final_task, max_iterations = build_sub_agent(
-        task=task,
-        parent=parent,
-        **config,
-        session_db=parent.session_db,
-        session_id=parent.session_id or "",
-    )
+    config.setdefault("model", parent.model)
+    agent_name = config.get("agent_name", "(inline)")
 
     try:
         tag = config["agent_name"] or "(inline)"
-        logger.info("sub_agent[%s] task=%r model=%s tools=%s iter=%d",
-                     tag, final_task[:80], config["model"], config["tools"], max_iterations)
-        result = sub.run_conversation(final_task, max_iterations=max_iterations)
-        logger.info("sub_agent[%s] done len=%d", tag, len(result))
-        return result
+        logger.info("delegate_task[%s] task=%r model=%s tools=%s iter=%d",
+                     tag, task[:80], config["model"], config["tools"], config["max_iterations"])
+
+        record_id = parent.fork_sub_agent(
+            agent_name=agent_name,
+            task=task,
+            model=config.get("model"),
+            tools=config.get("tools"),
+            max_iterations=config.get("max_iterations", 10),
+            context=config.get("context", ""),
+        )
+        result = parent.get_sub_agent_result(record_id)
+        if result is None:
+            return json.dumps({"error": "子任务执行失败：无法获取结果", "record_id": record_id})
+
+        logger.info("delegate_task[%s] done id=%s iter=%d tokens=%d+%d",
+                     tag, record_id, result.get("iterations", 0),
+                     result.get("prompt_tokens", 0), result.get("completion_tokens", 0))
+
+        return json.dumps({
+            "result": result.get("output", ""),
+            "record_id": record_id,
+            "agent": agent_name,
+            "iterations": result.get("iterations", 0),
+            "tool_calls_count": len(result.get("tool_calls", [])),
+            "prompt_tokens": result.get("prompt_tokens", 0),
+            "completion_tokens": result.get("completion_tokens", 0),
+        }, ensure_ascii=False)
     except Exception as e:
-        logger.error("sub_agent[%s] failed: %s", config.get("agent_name", "?"), e, exc_info=True)
+        logger.error("delegate_task[%s] failed: %s", tag, e, exc_info=True)
         return json.dumps({"error": f"子任务执行失败: {e}"})
 
 

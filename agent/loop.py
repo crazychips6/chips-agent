@@ -30,6 +30,7 @@ from plugins.manager import PluginManager
 from safety.audit import log_event
 from session.db import SessionDB
 from tool.registry import ToolRegistry
+from agent.sub_agent import SubAgentManager
 
 _DEBUG_LOG = os.path.join(os.path.dirname(__file__), "..", "log", "debug", "session.json")
 
@@ -96,6 +97,8 @@ class AIAgent:
         # ── 中断管理 ──
         # 使用 threading.Event（而非 bool），为未来多线程场景预留
         self._interrupt_requested = threading.Event()
+        # ── 子 Agent 管理 ──
+        self._sub_agent_manager = SubAgentManager()
 
     def interrupt(self):
         """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
@@ -217,6 +220,79 @@ class AIAgent:
         perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
         self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
         self.tool_names &= self.registry.tool_names
+
+    # ── 子 Agent 管理 ──
+
+    def fork_sub_agent(
+        self,
+        agent_name: str,
+        task: str,
+        *,
+        model: str | None = None,
+        tools: list[str] | None = None,
+        max_iterations: int = 10,
+        context: str = "",
+    ) -> str:
+        """创建并同步执行一个子 Agent，返回 record id。
+
+        子 Agent 共享父 Agent 的 gateway / registry / memory_manager，
+        拥有独立的消息历史。执行完毕后结果存入 _sub_agent_manager，
+        父 Agent 可通过 get_sub_agent_result(record_id) 追溯详情。
+
+        Args:
+            agent_name: 角色名（如 "researcher"）或 "(inline)"
+            task: 子任务描述
+            model: 子 Agent 使用的模型（默认继承父模型）
+            tools: 子 Agent 可用工具集（默认继承父工具）
+            max_iterations: 最大 ReAct 迭代次数，默认 10
+            context: 附加上下文，拼在 task 前
+
+        Returns:
+            子 Agent 记录的 id（用于后续 get_sub_agent_result 查询）
+        """
+        record_id = self._sub_agent_manager.create(agent_name, task)
+        self._sub_agent_manager.update(record_id, status="running")
+
+        try:
+            from tool.builtins.agent_tools import build_sub_agent
+
+            sub, final_task, max_iterations = build_sub_agent(
+                task=task,
+                parent=self,
+                model=model or self.model,
+                tools=tools,
+                max_iterations=max_iterations,
+                context=context,
+                agent_name=agent_name,
+                session_db=self.session_db,
+                session_id=self.session_id or "",
+            )
+
+            output = sub.run_conversation(final_task, max_iterations=max_iterations)
+            self._sub_agent_manager.capture_result(record_id, sub.messages, output)
+            logger.info(
+                "fork_sub_agent done id=%s name=%s iter=%d tools=%d",
+                record_id, agent_name,
+                self._sub_agent_manager.get(record_id).iterations,
+                len(self._sub_agent_manager.get(record_id).tool_calls),
+            )
+        except Exception as e:
+            logger.exception("fork_sub_agent failed name=%s task=%r", agent_name, task[:80])
+            self._sub_agent_manager.capture_result(record_id, [], "", error=str(e))
+
+        return record_id
+
+    def list_sub_agents(self, agent_name: str | None = None) -> list[dict]:
+        """列出子 Agent 执行记录（不含消息内容）。"""
+        return self._sub_agent_manager.list(agent_name)
+
+    def get_sub_agent_result(self, record_id: str) -> dict | None:
+        """获取子 Agent 完整结果（含消息链、工具调用、token）。"""
+        record = self._sub_agent_manager.get(record_id)
+        if record is None:
+            return None
+        from dataclasses import asdict
+        return asdict(record)
 
     # ── 主循环 ──
 

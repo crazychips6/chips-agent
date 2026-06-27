@@ -19,7 +19,7 @@ from typing import Any
 
 from agent.pool import acquire as pool_acquire, release as pool_release
 from tool.registry import registry
-from tool.builtins.agent_tools import get_parent, resolve_agent_config, build_sub_agent
+from tool.builtins.agent_tools import get_parent, resolve_agent_config
 
 logger = logging.getLogger("chips.tool.orchestrate")
 
@@ -183,7 +183,7 @@ def _run_single_step(
     parent,
     tag: str,
 ) -> dict:
-    """执行单个步骤，返回 {step, agent, output/error}。"""
+    """执行单个步骤，返回 {step, agent, output, record_id, error}。"""
     agent_name = step.get("agent", "")
     if not agent_name:
         return {"step": tag, "error": "step 缺少 agent 字段"}
@@ -199,18 +199,32 @@ def _run_single_step(
         pool_acquire(agent_name, pool_size=pool_size)
 
     try:
-        sub, final_task, max_iterations = build_sub_agent(
+        config.setdefault("model", parent.model)
+        record_id = parent.fork_sub_agent(
+            agent_name=agent_name,
             task=task_text,
-            parent=parent,
-            **config,
-            session_db=parent.session_db,
-            session_id=parent.session_id or "",
+            model=config.get("model"),
+            tools=config.get("tools"),
+            max_iterations=config.get("max_iterations", 10),
+            context=config.get("context", ""),
         )
-        output = sub.run_conversation(final_task, max_iterations=max_iterations)
+        result = parent.get_sub_agent_result(record_id)
+        if result is None:
+            return {"step": tag, "agent": agent_name, "error": "无法获取子 Agent 结果", "record_id": record_id}
+
+        logger.info("orchestrate[%s] done id=%s iter=%d tools=%d tokens=%d+%d",
+                     tag, record_id, result.get("iterations", 0),
+                     len(result.get("tool_calls", [])),
+                     result.get("prompt_tokens", 0), result.get("completion_tokens", 0))
+
         return {
             "step": tag,
             "agent": agent_name,
-            "output": output,
+            "output": result.get("output", ""),
+            "record_id": record_id,
+            "error": result.get("error"),
+            "iterations": result.get("iterations", 0),
+            "tool_calls_count": len(result.get("tool_calls", [])),
         }
     except Exception as e:
         logger.error("orchestrate[%s] failed: %s", tag, e, exc_info=True)
