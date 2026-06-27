@@ -31,6 +31,63 @@ from tool.registry import registry
 from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
 
+def _wire_tools(agent):
+    """接线 toolset / agent registry / todo store。返回 AgentRegistry 实例。"""
+    from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
+    wire_toolset_agent(agent)
+
+    from tool.builtins.agent_tools import wire_parent, wire_registry
+    wire_parent(agent)
+
+    from config.agent_config import AgentRegistry
+    agent_registry = AgentRegistry()
+    if agent_registry:
+        wire_registry(agent_registry)
+        _inject_agent_schemas(agent_registry)
+
+    from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
+    wire_todo_store(TodoStore())
+
+    return agent_registry
+
+
+def _register_slash_commands(agent, agent_registry):
+    """注册所有 /slash 命令，返回 CommandRegistry。"""
+    from agent.repl import CommandRegistry
+    cmd_reg = CommandRegistry()
+
+    def _clear(args):
+        agent.messages.clear()
+        agent._saved_count = 0
+        agent._tool_call_history.clear()
+        if agent.context_engine:
+            agent.context_engine.on_session_reset()
+        return u"✅ 对话历史已清除"
+    cmd_reg.register("clear", _clear, u"清除当前对话历史")
+
+    def _compact(args):
+        if not agent.context_engine:
+            return u"⚠ 未启用上下文压缩引擎（启动时加 --no-compress 了吗？）"
+        if len(agent.messages) < 4:
+            return u"对话太短，无需压缩"
+        before = len(agent.messages)
+        before_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        agent.messages = agent.context_engine.compress(agent.messages)
+        after = len(agent.messages)
+        after_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        return f"✅ 已压缩：{before} → {after} 条消息（{before_chars} → {after_chars} 字符）"
+    cmd_reg.register("compact", _compact, u"手动压缩对话上下文（减少 token 占用）")
+
+    from agent.commands.rewind_cmd import make_handler as _make_rewind_handler
+    cmd_reg.register("rewind", _make_rewind_handler(agent), u"回退 N 轮对话（如 /rewind 3）")
+
+    from agent.commands.agent_cmd import make_handler as _make_agent_handler
+    cmd_reg.register("agent", _make_agent_handler(agent_registry),
+                     u"Agent 角色管理：/agent list | add <name> --tools ... | remove <name> | update <name> --model ...")
+
+    return cmd_reg
+
+
 def run(args: object) -> None:
     """组装所有组件并启动交互式对话。
 
@@ -81,19 +138,7 @@ def run(args: object) -> None:
     agent.mcp_manager = mcp_mgr
 
     # ── 3. 工具系统接线 ──
-    from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
-    wire_toolset_agent(agent)
-
-    from tool.builtins.agent_tools import wire_parent, wire_registry
-    wire_parent(agent)
-
-    agent_registry = AgentRegistry()
-    if agent_registry:
-        wire_registry(agent_registry)
-        _inject_agent_schemas(agent_registry)
-
-    from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
-    wire_todo_store(TodoStore())
+    agent_registry = _wire_tools(agent)
 
     # ── 4. 执行环境 ──
     os.environ["CHIPS_ENV"] = args.env
@@ -137,40 +182,7 @@ def run(args: object) -> None:
     wire_plugin_manager(plugin_mgr)
 
     # ── 8. 斜杠命令注册 ──
-    cmd_reg = CommandRegistry()
-
-    # /clear
-    def _cmd_clear(args: list[str]) -> str | None:
-        agent.messages.clear()
-        agent._saved_count = 0
-        agent._tool_call_history.clear()
-        if agent.context_engine:
-            agent.context_engine.on_session_reset()
-        return "✅ 对话历史已清除"
-    cmd_reg.register("clear", _cmd_clear, "清除当前对话历史")
-
-    # /compact
-    def _cmd_compact(args: list[str]) -> str | None:
-        if not agent.context_engine:
-            return "⚠ 未启用上下文压缩引擎（启动时加 --no-compress 了吗？）"
-        if len(agent.messages) < 4:
-            return "对话太短，无需压缩"
-        before = len(agent.messages)
-        before_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
-        agent.messages = agent.context_engine.compress(agent.messages)
-        after = len(agent.messages)
-        after_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
-        return f"✅ 已压缩：{before} → {after} 条消息（{before_chars} → {after_chars} 字符）"
-    cmd_reg.register("compact", _cmd_compact, "手动压缩对话上下文（减少 token 占用）")
-
-    # /rewind
-    from agent.commands.rewind_cmd import make_handler as _make_rewind_handler
-    cmd_reg.register("rewind", _make_rewind_handler(agent), "回退 N 轮对话（如 /rewind 3）")
-
-    # /agent
-    from agent.commands.agent_cmd import make_handler as _make_agent_handler
-    cmd_reg.register("agent", _make_agent_handler(agent_registry),
-                     "Agent 角色管理：/agent list | add <name> --tools ... | remove <name> | update <name> --model ...")
+    cmd_reg = _register_slash_commands(agent, agent_registry)
 
     # ── 9. 启动画面 ──
     mem_status = "off"
