@@ -109,7 +109,6 @@ class AIAgent:
         # ── 自动路由规划（由 cli.py 在启动时注入 RuleEngine） ──
         self.auto_plan: bool = False
         self._rule_engine: Any = None  # rules.engine.RuleEngine
-        self._llm_router: Any = None   # rules.llm_router.LLMRouter
         self._local_router: Any = None  # rules.local_router.LocalRouter
 
     def interrupt(self):
@@ -323,9 +322,6 @@ class AIAgent:
         if action == "delegate":
             return self._auto_delegate(user_message, decision.target)
 
-        if action == "llm_router":
-            return self._auto_llm_route(user_message)
-
         if action == "orchestrate":
             return self._auto_orchestrate(user_message, decision)
 
@@ -366,24 +362,7 @@ class AIAgent:
             logger.exception("auto_delegate_failed agent=%s", agent_name)
             return None
 
-    # ── LLM Router 执行（由 _execute_auto_plan 触发） ──
 
-    def _auto_llm_route(self, user_message: str) -> str | None:
-        """调用 LLM Router 分析任务并执行路由决策。"""
-        if self._llm_router is None:
-            logger.info("auto_llm_router_unavailable: LLMRouter 未注入")
-            return None
-
-        decision = self._llm_router.route(user_message)
-        logger.info("auto_llm_route action=%s target=%s reason=%s",
-                     decision.action, decision.target, decision.reason[:80])
-
-        if decision.action == "delegate":
-            return self._auto_delegate(user_message, decision.target)
-        if decision.action == "orchestrate":
-            return self._auto_orchestrate(user_message, decision)
-        # direct → 继续走 ReAct 循环
-        return None
 
     def _auto_orchestrate(self, user_message: str, decision) -> str | None:
         """执行编排路由决策。"""
