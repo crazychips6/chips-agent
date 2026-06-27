@@ -1,0 +1,280 @@
+"""boot — Agent 系统组装与启动
+
+接收 cli.py 解析后的 args，完成所有 wiring 并启动 ReplLoop。
+
+这是 chips 整个系统结构的"工作目录"——
+阅读此文件即可了解所有组件如何连接。
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import sys
+import time
+
+from agent.logger import setup_logging, get_logger
+from agent.loop import AIAgent
+from agent.prompt import search_context_files
+from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
+from agent.repl_prompt_toolkit import PromptToolkitInputBackend
+from config.agent_config import AgentRegistry
+from config.store import ConfigStore
+from gateway.providers.openai import OpenAIProvider
+from gateway.stats import UsageRecorder
+from memory.manager import MemoryManager
+from memory.providers.builtin import BuiltinMemoryProvider
+from plugins import PluginManager
+from plugins.mcp import MCPManager
+from session.db import SessionDB
+from tool.registry import registry
+from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
+
+
+def run(args: object) -> None:
+    """组装所有组件并启动交互式对话。
+
+    Args:
+        args: argparse 解析后的命名空间（由 cli.py 传入）
+    """
+    # ── 1. 核心基础设施 ──
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    raw_gateway = OpenAIProvider(api_key=api_key, base_url=args.base_url)
+    recorder = UsageRecorder(raw_gateway, pricing=ConfigStore().read_pricing())
+
+    agent = AIAgent(
+        model=args.model,
+        debug_context=args.debug_context,
+        verbose=args.verbose,
+        stream=not args.no_stream,
+        gateway=recorder,
+    )
+    agent.registry = registry
+    toolset_names = [n.strip() for n in args.toolset.split(",")]
+    agent.permanent_toolsets = list(toolset_names)
+    agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(toolset_names))) & registry.tool_names
+
+    context_files = search_context_files()
+    if context_files:
+        agent.context_files = context_files
+
+    if not args.no_memory:
+        agent.memory_manager = _build_memory_manager(holographic=args.holographic)
+
+    # ── 2. 插件 + MCP ──
+    plugin_mgr = PluginManager(registry=registry)
+    plugin_mgr.add_default_paths()
+    loaded = plugin_mgr.load_all()
+    if loaded:
+        get_logger().info("plugins_loaded count=%d", loaded)
+    agent.plugin_manager = plugin_mgr
+    agent.tool_names |= plugin_mgr.plugin_tool_names
+    agent._extra_tool_names |= plugin_mgr.plugin_tool_names
+
+    mcp_mgr = MCPManager(registry=registry)
+    mcp_servers_config = ConfigStore().read_mcp_servers()
+    mcp_loaded = []
+    if mcp_servers_config:
+        mcp_loaded = mcp_mgr.load_servers(mcp_servers_config)
+        agent.tool_names |= set(mcp_mgr.get_all_tool_names())
+        agent._extra_tool_names |= set(mcp_mgr.get_all_tool_names())
+    agent.mcp_manager = mcp_mgr
+
+    # ── 3. 工具系统接线 ──
+    from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
+    wire_toolset_agent(agent)
+
+    from tool.builtins.agent_tools import wire_parent, wire_registry
+    wire_parent(agent)
+
+    agent_registry = AgentRegistry()
+    if agent_registry:
+        wire_registry(agent_registry)
+        _inject_agent_schemas(agent_registry)
+
+    from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
+    wire_todo_store(TodoStore())
+
+    # ── 4. 执行环境 ──
+    os.environ["CHIPS_ENV"] = args.env
+    if args.env == "docker":
+        os.environ["CHIPS_DOCKER_IMAGE"] = args.docker_image
+
+    # ── 5. 上下文压缩引擎 ──
+    if not args.no_compress:
+        from agent.context_compressor import ContextCompressor
+        compressor = ContextCompressor(
+            threshold_percent=0.50,
+            summarize_fn=lambda prompt: agent.gateway.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=agent.model,
+                max_tokens=4000,
+            ).content or "",
+        )
+        compressor.update_context_length(128_000)
+        agent.context_engine = compressor
+
+    # ── 6. Session 持久化 ──
+    session_db = SessionDB(db_path=".chips/sessions.db")
+    agent.session_db = session_db
+    _restore_or_create_session(agent, args)
+    recorder._session_db = session_db
+    recorder._session_id = agent.session_id
+
+    # ── 7. 日志 + TUI + 技能系统 ──
+    setup_logging(session_id=agent.session_id)
+    get_logger().info("session started")
+
+    from agent.tui import TUI
+    tui = TUI()
+
+    from agent.skill import SkillManager
+    from tool.builtins.skill_tools import wire_skill_manager, wire_plugin_manager
+    skill_mgr = SkillManager()
+    skill_mgr.scan()
+    agent.skills_index = skill_mgr.get_skills_index_prompt()
+    wire_skill_manager(skill_mgr)
+    wire_plugin_manager(plugin_mgr)
+
+    # ── 8. 斜杠命令注册 ──
+    cmd_reg = CommandRegistry()
+
+    # /clear
+    def _cmd_clear(args: list[str]) -> str | None:
+        agent.messages.clear()
+        agent._saved_count = 0
+        agent._tool_call_history.clear()
+        if agent.context_engine:
+            agent.context_engine.on_session_reset()
+        return "✅ 对话历史已清除"
+    cmd_reg.register("clear", _cmd_clear, "清除当前对话历史")
+
+    # /compact
+    def _cmd_compact(args: list[str]) -> str | None:
+        if not agent.context_engine:
+            return "⚠ 未启用上下文压缩引擎（启动时加 --no-compress 了吗？）"
+        if len(agent.messages) < 4:
+            return "对话太短，无需压缩"
+        before = len(agent.messages)
+        before_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        agent.messages = agent.context_engine.compress(agent.messages)
+        after = len(agent.messages)
+        after_chars = sum(len(m.get("content", "") or "") for m in agent.messages)
+        return f"✅ 已压缩：{before} → {after} 条消息（{before_chars} → {after_chars} 字符）"
+    cmd_reg.register("compact", _cmd_compact, "手动压缩对话上下文（减少 token 占用）")
+
+    # /rewind
+    from agent.commands.rewind_cmd import make_handler as _make_rewind_handler
+    cmd_reg.register("rewind", _make_rewind_handler(agent), "回退 N 轮对话（如 /rewind 3）")
+
+    # /agent
+    from agent.commands.agent_cmd import make_handler as _make_agent_handler
+    cmd_reg.register("agent", _make_agent_handler(agent_registry),
+                     "Agent 角色管理：/agent list | add <name> --tools ... | remove <name> | update <name> --model ...")
+
+    # ── 9. 启动画面 ──
+    mem_status = "off"
+    if agent.memory_manager.providers:
+        provider_names = [p.name for p in agent.memory_manager.providers]
+        mem_status = "+".join(provider_names)
+    mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
+    skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
+    compress_status = "off" if args.no_compress else "on"
+
+    tui.startup(
+        model=args.model,
+        tool_count=len(agent.tool_names),
+        toolset_names=toolset_names,
+        memory_status=mem_status,
+        mcp_status=mcp_status,
+        skill_status=skill_status,
+        compress_status=compress_status,
+        context_file_count=len(agent.context_files),
+    )
+
+    # ── 单条消息模式 ──
+    if args.message:
+        tui.chat(agent, args.message)
+        stats = recorder.format_summary()
+        if stats:
+            print(f"\n{stats}")
+        return
+
+    print("输入 /help 查看命令, /exit 退出")
+    print()
+
+    # ── 10. SIGINT 处理器 ──
+    _last_sigint = 0.0
+
+    def _sigint_handler(signum, frame):
+        nonlocal _last_sigint
+        now = time.time()
+        if now - _last_sigint < 2.0:
+            print("\n[强制退出]")
+            sys.exit(1)
+        _last_sigint = now
+        agent.interrupt()
+        print("\n[正在中断...]")
+
+    signal.signal(signal.SIGINT, _sigint_handler)
+
+    # ── 11. 启动 ReplLoop ──
+    loop = ReplLoop(
+        agent=agent,
+        input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
+        output_backend=StdioOutputBackend(),
+        cmd_registry=cmd_reg,
+        tui=tui,
+    )
+    loop.run()
+    stats = recorder.format_summary()
+    if stats:
+        print(f"\n{stats}")
+    agent.shutdown()
+
+
+# ── 辅助函数 ──
+
+
+def _build_memory_manager(holographic: bool = False) -> MemoryManager:
+    memory_dir = os.getenv("CHIPS_MEMORY_DIR", ".memory")
+    mm = MemoryManager()
+    mm.add_provider(BuiltinMemoryProvider(memory_dir=memory_dir))
+    if holographic:
+        from memory.providers.holographic import HolographicMemoryProvider
+        mm.add_provider(HolographicMemoryProvider())
+    return mm
+
+
+def _inject_agent_schemas(agent_registry: AgentRegistry) -> None:
+    """将 agent 角色名注入 delegate_task/orchestrate 的 schema enum。"""
+    _agent_names = agent_registry.names
+    _de = registry._entries.get("delegate_task")
+    if _de and _agent_names:
+        _de.schema["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
+    _orch = registry._entries.get("orchestrate")
+    if _orch and _agent_names:
+        _os = _orch.schema
+        _os["function"]["parameters"]["properties"]["steps"]["items"]["properties"]["agent"]["enum"] = _agent_names
+        _os["function"]["parameters"]["properties"]["agents"]["items"]["enum"] = _agent_names
+    get_logger().info("agent_registry loaded names=%s injected into delegate_task/orchestrate schema", _agent_names)
+
+
+def _restore_or_create_session(agent: AIAgent, args: object) -> None:
+    """恢复已有会话或创建新会话。"""
+    session_db = agent.session_db
+    if args.resume:
+        session_id = args.resume if isinstance(args.resume, str) else None
+        if not session_id:
+            sessions = session_db.list_sessions(limit=1)
+            if sessions:
+                session_id = sessions[0]["id"]
+        if session_id:
+            sess = session_db.get_session(session_id)
+            if sess:
+                agent.session_id = session_id
+                agent.messages = session_db.get_history(session_id)
+                agent._saved_count = len(agent.messages)
+                print(f"已恢复会话 {session_id}（{len(agent.messages)} 条消息）")
+    if not agent.session_id:
+        agent.session_id = session_db.create_session()
