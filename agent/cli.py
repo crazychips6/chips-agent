@@ -208,6 +208,101 @@ def main():
             _os["function"]["parameters"]["properties"]["agents"]["items"]["enum"] = _agent_names
         get_logger().info("agent_registry loaded names=%s injected into delegate_task/orchestrate schema", _agent_names)
 
+    def _sync_agent_schemas():
+        """将 agent_registry 中的角色名同步到 delegate_task/orchestrate 的 schema enum。"""
+        from tool.registry import registry as _tool_registry
+        _agent_names = agent_registry.names
+        _de = _tool_registry._entries.get("delegate_task")
+        if _de and _agent_names:
+            _de.schema["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
+        _orch = _tool_registry._entries.get("orchestrate")
+        if _orch and _agent_names:
+            _os = _orch.schema
+            _os["function"]["parameters"]["properties"]["steps"]["items"]["properties"]["agent"]["enum"] = _agent_names
+            _os["function"]["parameters"]["properties"]["agents"]["items"]["enum"] = _agent_names
+
+    # ── /agent — Agent Registry CRUD ──
+    def _cmd_agent(args: list[str]) -> str | None:
+        if not args:
+            return "用法：/agent list | add <name> [--tools ...] [--model ...] [--iterations N] | remove <name> | update <name> [--tools ...]"
+
+        sub = args[0]
+        if sub == "list":
+            agents = agent_registry.list()
+            if not agents:
+                return "ℹ 暂无已注册 Agent 角色。"
+            lines = ["已注册 Agent 角色："]
+            for a in agents:
+                tools = ", ".join(a.get("tools", []))
+                lines.append(f"  {a['name']:20s} model={a.get('model','?'):20s} tools=[{tools}]")
+            return "\n".join(lines)
+
+        if sub == "add":
+            if len(args) < 2:
+                return "用法：/agent add <name> [--tools t1,t2] [--model m] [--prompt p] [--iterations N] [--pool N]"
+            name = args[1]
+            kwargs = _parse_agent_kwargs(args[2:])
+            try:
+                entry = agent_registry.register(name, kwargs)
+                _sync_agent_schemas()
+                return f"✅ 已注册 Agent「{name}」（model={entry.get('model','?')}, tools={entry.get('tools',[])})"
+            except ValueError as e:
+                return f"⚠ {e}"
+
+        if sub == "remove":
+            if len(args) < 2:
+                return "用法：/agent remove <name>"
+            name = args[1]
+            if agent_registry.unregister(name):
+                _sync_agent_schemas()
+                return f"✅ 已注销 Agent「{name}」"
+            return f"⚠ Agent「{name}」不存在"
+
+        if sub in ("update", "set"):
+            if len(args) < 4:
+                return "用法：/agent update <name> --tools t1,t2 --model m [--prompt p]"
+            name = args[1]
+            kwargs = _parse_agent_kwargs(args[2:])
+            if not kwargs:
+                return "⚠ 请至少指定一个要更新的字段（--tools / --model / --prompt / --iterations / --pool）"
+            entry = agent_registry.update(name, kwargs)
+            if entry is None:
+                return f"⚠ Agent「{name}」不存在"
+            _sync_agent_schemas()
+            return f"✅ 已更新 Agent「{name}」"
+
+        return f"⚠ 未知子命令：{sub}（支持：list, add, remove, update）"
+
+    def _parse_agent_kwargs(raw: list[str]) -> dict:
+        """解析 --key value 对。"""
+        kwargs = {}
+        i = 0
+        while i < len(raw):
+            arg = raw[i]
+            if arg.startswith("--"):
+                key = arg[2:]
+                if i + 1 < len(raw) and not raw[i + 1].startswith("--"):
+                    val = raw[i + 1]
+                    i += 2
+                    if key in ("tools",):
+                        kwargs[key] = [t.strip() for t in val.split(",") if t.strip()]
+                    elif key in ("iterations", "max_iterations", "pool", "pool_size"):
+                        try:
+                            kwargs["max_iterations" if key in ("iterations",) else
+                                    "pool_size" if key in ("pool",) else key] = int(val)
+                        except ValueError:
+                            pass
+                    elif key in ("model", "prompt", "system_prompt", "description"):
+                        kwargs[{"prompt": "system_prompt"}.get(key, key)] = val
+                else:
+                    kwargs[key] = True
+                    i += 1
+            else:
+                i += 1
+        return kwargs
+
+    cmd_reg.register("agent", _cmd_agent, "Agent 角色管理：/agent list | add <name> --tools ... | remove <name> | update <name> --model ...")
+
     # ── TodoStore（模块级，供 todo 工具使用） ──
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
     wire_todo_store(TodoStore())
