@@ -402,16 +402,27 @@ Target ~{min(self.summary_max_tokens, 2000)} tokens. Be concrete — include fil
         compressed = messages[:head_end]
 
         if summary:
-            # 选择不跟首尾角色冲突的角色
-            last_head_role = messages[head_end - 1].get("role", "user") if head_end > 0 else "user"
-            first_tail_role = tail[0].get("role", "user") if tail else "user"
-            summary_role = "assistant" if last_head_role == "user" else "user"
-            if summary_role == first_tail_role:
-                summary_role = "assistant" if first_tail_role == "user" else "user"
-            compressed.append({"role": summary_role, "content": summary})
-        else:
-            # 摘要失败 → 简单截断（替代直接删除）
-            logger.warning("Summary failed, dropping %d middle messages without summary", len(middle))
+            # 摘要比原文还长 → 这叫膨胀，不是压缩
+            middle_chars = sum(_content_len(m.get("content") or "") for m in middle)
+            prefix_chars = len(_SUMMARY_PREFIX)
+            if _content_len(summary) + prefix_chars >= middle_chars and middle_chars > 0:
+                logger.info(
+                    "Summary (%d chars) >= middle region (%d chars) — skipping summary, using truncation",
+                    _content_len(summary) + prefix_chars, middle_chars,
+                )
+                summary = None
+            else:
+                # 选择不跟首尾角色冲突的角色
+                last_head_role = messages[head_end - 1].get("role", "user") if head_end > 0 else "user"
+                first_tail_role = tail[0].get("role", "user") if tail else "user"
+                summary_role = "assistant" if last_head_role == "user" else "user"
+                if summary_role == first_tail_role:
+                    summary_role = "assistant" if first_tail_role == "user" else "user"
+                compressed.append({"role": summary_role, "content": summary})
+
+        if not summary:
+            # 摘要失败/膨胀 → 简单截断中间区域（Phase 1 已裁剪 tool 结果，损失有限）
+            logger.warning("Compression fell back to truncation: dropping %d middle messages", len(middle))
 
         compressed.extend(tail)
 
