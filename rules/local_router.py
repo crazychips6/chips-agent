@@ -47,7 +47,7 @@ class LocalRouter:
     """端侧小模型意图路由。"""
 
     OLLAMA_BASE = "http://localhost:11434"
-    MODEL = "qwen2.5:0.5b"
+    MODEL = "qwen2.5:1.5b-instruct-q4_K_S"
 
     def __init__(self):
         self._available: bool | None = None
