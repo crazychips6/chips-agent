@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -25,11 +25,26 @@ logger = logging.getLogger("chips.web")
 
 HERE = Path(__file__).parent
 STATIC_DIR = HERE / "static"
-SECRET_KEY = os.getenv("CHIPS_WEB_SECRET", "change-me-in-production")
+
+# JWT 密钥：优先从环境变量读取，否则生成随机密钥（重启后 token 失效）
+_SECRET_KEY_ENV = os.getenv("CHIPS_WEB_SECRET")
+if _SECRET_KEY_ENV:
+    SECRET_KEY = _SECRET_KEY_ENV
+else:
+    import secrets
+    SECRET_KEY = secrets.token_hex(32)
+    logger.warning("CHIPS_WEB_SECRET 未设置，使用随机密钥（服务重启后已签发的 token 将失效）")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
-SIMPLE_USER = os.getenv("CHIPS_WEB_USER", "admin")
-SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS", "admin")
+
+# 登录凭据：必须通过环境变量显式设置，无默认值
+SIMPLE_USER = os.getenv("CHIPS_WEB_USER")
+SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS")
+if not SIMPLE_USER or not SIMPLE_PASS:
+    raise RuntimeError(
+        "必须设置 CHIPS_WEB_USER 和 CHIPS_WEB_PASS 环境变量才能启动 Web 服务"
+    )
 
 # ── 模型 ──
 
@@ -37,6 +52,7 @@ SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS", "admin")
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    reset: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -69,13 +85,18 @@ def verify_token(token: str) -> str | None:
 
 app = FastAPI(title="chips Web", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS：默认关闭跨域（前端同源无需 CORS），通过 CHIPS_WEB_CORS_ORIGINS 开启
+# 多个 origin 用逗号分隔：http://localhost:3000,https://example.com
+_CORS_ORIGINS = os.getenv("CHIPS_WEB_CORS_ORIGINS", "")
+CORS_ORIGINS = [o.strip() for o in _CORS_ORIGINS.split(",") if o.strip()]
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def get_current_user(request: Request) -> str:
@@ -99,6 +120,11 @@ def optional_user(request: Request) -> str | None:
 # ── Agent 单例 ──
 
 _agent = None
+
+
+def _get_agent_or_none():
+    """返回 _agent 但不初始化（用于 health/metrics 只读访问）。"""
+    return _agent
 
 
 def get_agent():
@@ -189,6 +215,14 @@ def get_agent():
         wire_plugin_manager(plugin_mgr)
 
         _agent = agent
+        # 初始化部署状态指标
+        try:
+            from gateway.metrics import set_deployment_healthy
+            set_deployment_healthy("gateway")
+            set_deployment_healthy("session_db")
+            set_deployment_healthy("memory")
+        except Exception:
+            pass
         logger.info("agent_initialized")
     return _agent
 
@@ -213,9 +247,158 @@ async def shutdown():
 # ── 路由 ──
 
 
+@app.get("/metrics")
+async def metrics_prometheus():
+    """Prometheus 标准格式指标端点，供 Prometheus server 抓取。"""
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return PlainTextResponse(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
+
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    """健康检查：返回各子系统状态。"""
+    status = {"status": "ok", "subsystems": {}}
+
+    # Agent 状态
+    agent = _get_agent_or_none()
+    if agent is None:
+        status["subsystems"]["agent"] = "not_initialized"
+    else:
+        agent_ok = True
+        agent_info = {
+            "model": agent.model,
+            "tools": len(agent.tool_names),
+            "session_id": agent.session_id,
+            "messages": len(agent.messages),
+        }
+        status["subsystems"]["agent"] = agent_info
+
+    # Memory 状态
+    if agent and agent.memory_manager:
+        providers = [p.name for p in agent.memory_manager.providers]
+        status["subsystems"]["memory"] = {
+            "providers": providers,
+            "active": len(providers),
+        }
+        try:
+            from gateway.metrics import set_deployment_healthy, set_deployment_degraded
+            set_deployment_healthy("memory")
+        except Exception:
+            pass
+    else:
+        status["subsystems"]["memory"] = "disabled"
+        try:
+            from gateway.metrics import set_deployment_down
+            set_deployment_down("memory")
+        except Exception:
+            pass
+
+    # Session DB 状态
+    if agent and agent.session_db:
+        try:
+            count = agent.session_db.summary_stats().get("total_sessions", -1)
+            status["subsystems"]["session_db"] = {"sessions": count, "status": "ok"}
+            try:
+                from gateway.metrics import set_deployment_healthy
+                set_deployment_healthy("session_db")
+            except Exception:
+                pass
+        except Exception as e:
+            status["subsystems"]["session_db"] = {"status": "error", "detail": str(e)}
+            try:
+                from gateway.metrics import set_deployment_degraded
+                set_deployment_degraded("session_db")
+            except Exception:
+                pass
+    else:
+        status["subsystems"]["session_db"] = "disabled"
+
+    # 网关 / API 状态
+    if agent and hasattr(agent, "gateway"):
+        gateway = getattr(agent, "gateway", None)
+        inner = getattr(gateway, "_inner", None)
+        provider = type(inner).__name__ if inner else "unknown"
+        status["subsystems"]["gateway"] = {"provider": provider, "status": "ok"}
+
+    return status
+
+
+@app.get("/api/metrics")
+async def metrics():
+    """返回 Prometheus 风格的聚合指标。"""
+    agent = _get_agent_or_none()
+    if agent is None:
+        return {"status": "not_initialized"}
+
+    gateway = getattr(agent, "gateway", None)
+    if gateway is None or not hasattr(gateway, "get_metrics"):
+        return {"status": "unavailable", "reason": "gateway not instrumented"}
+
+    result = gateway.get_metrics()
+    result["status"] = "ok"
+    return result
+
+
+@app.get("/api/insights/cost-by-model")
+async def insights_cost_by_model(days: int = Query(7, ge=1, le=365)):
+    """按模型汇总费用。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.cost_by_model(days=days).dict()}
+
+
+@app.get("/api/insights/daily-cost")
+async def insights_daily_cost(days: int = Query(30, ge=1, le=365)):
+    """每日费用趋势。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.daily_cost_trend(days=days).dict()}
+
+
+@app.get("/api/insights/tool-usage")
+async def insights_tool_usage(days: int = Query(7, ge=1, le=365)):
+    """工具使用统计。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.tool_usage(days=days).dict()}
+
+
+@app.get("/api/insights/session/{session_id}")
+async def insights_session(session_id: str):
+    """单会话完整画像。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    result = engine.session_portrait(session_id)
+    data = result.dict()
+    if not data:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"insights": data}
+
+
+@app.get("/api/insights/weekly-report")
+async def insights_weekly():
+    """一键周报。"""
+    from agent.insights import InsightsEngine
+    agent = _get_agent_or_none()
+    if agent is None or not agent.session_db:
+        raise HTTPException(status_code=503, detail="agent not initialized")
+    engine = InsightsEngine(agent.session_db)
+    return {"insights": engine.weekly_report().dict()}
 
 
 @app.post("/api/login", response_model=TokenResponse)
@@ -235,6 +418,16 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
 
     def run():
         try:
+            if body.reset:
+                agent.messages.clear()
+                agent._saved_count = 0
+                agent._tool_call_history.clear()
+                agent.session_id = agent.session_db.create_session()
+                if agent.context_engine:
+                    agent.context_engine.on_session_reset()
+                gateway = getattr(agent, "gateway", None)
+                if gateway and hasattr(gateway, "reset"):
+                    gateway.reset()
             agent.run_conversation(body.message, chunk_callback=on_chunk)
         except Exception as e:
             queue.put_nowait(f"\n[Error: {e}]")
@@ -258,9 +451,20 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
 async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)):
     """非流式接口，适合测试。"""
     agent = get_agent()
+    if body.reset:
+        agent.messages.clear()
+        agent._saved_count = 0
+        agent._tool_call_history.clear()
+        agent.session_id = agent.session_db.create_session()
+        if agent.context_engine:
+            agent.context_engine.on_session_reset()
+        gateway = getattr(agent, "gateway", None)
+        if gateway and hasattr(gateway, "reset"):
+            gateway.reset()
     chunks: list[str] = []
     agent.run_conversation(body.message, chunk_callback=lambda c: chunks.append(c))
     return {"reply": "".join(chunks)}
+
 
 
 # ── 静态文件 ──

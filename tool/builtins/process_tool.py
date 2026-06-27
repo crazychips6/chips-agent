@@ -352,17 +352,7 @@ PROCESS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "process",
-        "description": (
-            "进程管理工具。支持三个操作：\n\n"
-            "1. list — 列出当前进程（默认按 CPU 排序）\n"
-            "   参数: sort=cpu|mem|pid|name, limit=30\n\n"
-            "2. get — 查看单个进程详情\n"
-            "   参数: pid=1234 或 name='nginx'\n\n"
-            "3. kill — 终止进程\n"
-            "   参数: pid=1234 或 name='nginx', signal=TERM|KILL|HUP|INT\n"
-            "   Linux 支持多种信号；Windows 下 KILL 强制终止\n\n"
-            "注意：kill 操作会经过安全审批，部分操作需要确认。"
-        ),
+        "description": "管理进程（列表/详情/终止）",
         "parameters": {
             "type": "object",
             "properties": {
@@ -377,21 +367,21 @@ PROCESS_SCHEMA = {
                 },
                 "name": {
                     "type": "string",
-                    "description": "进程名（get/kill 按名搜索）",
+                    "description": "进程名",
                 },
                 "sort": {
                     "type": "string",
                     "enum": ["cpu", "mem", "pid", "name"],
-                    "description": "排序方式（list 操作使用，默认 cpu）",
+                    "description": "排序方式（默认 cpu）",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "返回条数上限（list 操作使用，默认 30，最大 200）",
+                    "description": "条数上限（默认 30，最大 200）",
                 },
                 "signal": {
                     "type": "string",
                     "enum": ["TERM", "KILL", "HUP", "INT", "QUIT", "STOP", "CONT"],
-                    "description": "信号类型（kill 操作使用，默认 TERM）",
+                    "description": "信号类型（默认 TERM）",
                 },
             },
             "required": ["action"],

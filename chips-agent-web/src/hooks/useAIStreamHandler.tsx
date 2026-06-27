@@ -43,10 +43,14 @@ const useAIChatStreamHandler = () => {
 
       try {
         const apiUrl = '/api/chat'
+        const shouldReset = useStore.getState().pendingReset
+        if (shouldReset) {
+          useStore.getState().setPendingReset(false)
+        }
 
         await streamResponse({
           apiUrl,
-          body: { message: input },
+          body: { message: input, reset: shouldReset },
           onToken: (token: string) => {
             setMessages((prevMessages) => {
               const newMessages = [...prevMessages]

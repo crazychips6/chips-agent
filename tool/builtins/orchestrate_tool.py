@@ -1,10 +1,10 @@
-﻿"""orchestrate 工具 — 多 Agent 编排模式
+﻿"""orchestrate 工具 — 多 Agent 编排
 
-Phase 3: 三种编排模式：
-
-  1. supervisor — 多子任务并发/串行执行，汇总结果
-  2. pipeline — 链式接力，上一步输出作为下一步上下文
-  3. debate — 多 Agent 独立回答同一问题，返回对比
+四种模式：
+  1. single     — 单步委派（原 delegate_task）
+  2. supervisor — 多子任务并发/串行执行，汇总结果
+  3. pipeline   — 链式接力，上一步输出作为下一步上下文
+  4. debate     — 多 Agent 独立回答同一问题，返回对比
 
 共享 agent_tools 的工厂函数 resolve_agent_config / build_sub_agent。
 Agent Pool 控制每个角色的并发上限。
@@ -29,8 +29,10 @@ def _handle(args: dict[str, Any]) -> str:
     if parent is None:
         return json.dumps({"error": "parent agent not initialized"})
 
-    mode = args.get("mode", "supervisor")
+    mode = args.get("mode", "single")
 
+    if mode == "single":
+        return _run_single(args, parent)
     if mode == "supervisor":
         return _run_supervisor(args, parent)
     if mode == "pipeline":
@@ -38,7 +40,53 @@ def _handle(args: dict[str, Any]) -> str:
     if mode == "debate":
         return _run_debate(args, parent)
 
-    return json.dumps({"error": f"未知编排模式: {mode}（支持: supervisor, pipeline, debate）"})
+    return json.dumps({"error": f"未知编排模式: {mode}（支持: single, supervisor, pipeline, debate）"})
+
+
+# ── Single（原 delegate_task）──
+
+
+def _run_single(args: dict, parent) -> str:
+    task = args.get("task", "")
+    if not task:
+        return json.dumps({"error": "task 不能为空"})
+
+    try:
+        config = resolve_agent_config(args, parent)
+    except (RuntimeError, ValueError) as e:
+        return json.dumps({"error": str(e)})
+
+    config.setdefault("model", parent.model)
+    agent_name = config.get("agent_name", "(inline)")
+
+    try:
+        tag = config["agent_name"] or "(inline)"
+        logger.info("orchestrate_single[%s] task=%r model=%s tools=%s iter=%d",
+                     tag, task[:80], config["model"], config["tools"], config["max_iterations"])
+        record_id = parent.fork_sub_agent(
+            agent_name=agent_name,
+            task=task,
+            model=config.get("model"),
+            tools=config.get("tools"),
+            max_iterations=config.get("max_iterations", 10),
+            context=config.get("context", ""),
+        )
+        result = parent.get_sub_agent_result(record_id)
+        if result is None:
+            return json.dumps({"error": "子任务执行失败：无法获取结果", "record_id": record_id})
+        logger.info("orchestrate_single[%s] done id=%s iter=%d tokens=%d+%d",
+                     tag, record_id, result.get("iterations", 0),
+                     result.get("prompt_tokens", 0), result.get("completion_tokens", 0))
+        return json.dumps({
+            "result": result.get("output", ""),
+            "record_id": record_id,
+            "agent": agent_name,
+            "iterations": result.get("iterations", 0),
+            "tool_calls_count": len(result.get("tool_calls", [])),
+        }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("orchestrate_single[%s] failed: %s", tag, e, exc_info=True)
+        return json.dumps({"error": f"子任务执行失败: {e}"})
 
 
 # ── Supervisor ──
@@ -262,53 +310,69 @@ ORCHESTRATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "orchestrate",
-        "description": (
-            "多 Agent 编排执行。支持三种模式：\n\n"
-            "1. supervisor（推荐）：定义多个子任务，并发或串行执行，汇总结果\n"
-            '   例: {"mode":"supervisor","steps":[{"agent":"researcher","task":"搜索A"},...],"parallel":true}\n\n'
-            "2. pipeline：链式执行，上一步的输出自动注入下一步的上下文\n"
-            '   例: {"mode":"pipeline","steps":[{"agent":"coder","task":"写代码"},{"agent":"reviewer","task":"审查"}]}\n\n'
-            "3. debate：多个 Agent 独立回答同一问题，返回对比\n"
-            '   例: {"mode":"debate","agents":["coder","researcher"],"task":"这个设计有什么问题？"}\n\n'
-            "适用场景：需要多个子 Agent 协作完成的复杂任务。"
-        ),
+        "description": "多 Agent 编排（single/supervisor/pipeline/debate）",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["supervisor", "pipeline", "debate"],
-                    "description": "编排模式",
+                    "enum": ["single", "supervisor", "pipeline", "debate"],
+                    "description": "single=单步委派, supervisor=多子任务, pipeline=链式, debate=对比",
                 },
+                # ── single 独有 ──
+                "agent": {
+                    "type": "string",
+                    "description": "注册角色名（single 使用）",
+                },
+                "task": {
+                    "type": "string",
+                    "description": "任务描述（single/debate 使用）",
+                },
+                "tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可用工具集（single 使用）",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "模型名（single 使用）",
+                },
+                "max_iterations": {
+                    "type": "integer",
+                    "description": "最大迭代次数（single 使用，默认 10，最大 30）",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "附加上下文（single 使用）",
+                },
+                # ── supervisor/pipeline 独有 ──
                 "steps": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "agent": {"type": "string", "description": "Agent 角色名（可选值见 enum）"},
+                            "agent": {"type": "string", "description": "Agent 角色名"},
                             "task": {"type": "string", "description": "子任务描述"},
                             "model": {"type": "string", "description": "可选，覆盖模型"},
                         },
                         "required": ["agent", "task"],
                     },
-                    "description": "步骤列表（supervisor/pipeline 使用）",
+                    "description": "子任务步骤（supervisor/pipeline 使用）",
                 },
+                # ── debate 独有 ──
                 "agents": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Agent 角色名列表（debate 使用）",
+                    "description": "Agent 列表（debate 使用）",
                 },
-                "task": {
-                    "type": "string",
-                    "description": "任务描述（debate 使用，所有 Agent 回答同一问题）",
-                },
+                # ── supervisor 独有 ──
                 "goal": {
                     "type": "string",
-                    "description": "总体目标描述（supervisor 使用，可选）",
+                    "description": "总目标（supervisor 可选）",
                 },
                 "parallel": {
                     "type": "boolean",
-                    "description": "是否并发执行子任务（supervisor 使用，默认 false）",
+                    "description": "并发执行（supervisor，默认 false）",
                 },
             },
             "required": ["mode"],

@@ -64,7 +64,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "screenshot",
-            "description": "拍摄屏幕截图并保存为图片文件。返回文件的绝对路径，可结合 file_read 查看或作为图像输入分析。",
+            "description": "拍摄屏幕截图",
             "parameters": {
                 "type": "object",
                 "properties": {},

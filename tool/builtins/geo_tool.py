@@ -57,8 +57,7 @@ GEO_SCHEMA = {
     "type": "function",
     "function": {
         "name": "get_location",
-        "description": "获取你的当前位置信息（城市、地区、国家、经纬度、时区）。"
-                       "基于 IP 地理定位，无精度要求。不需要任何参数。",
+        "description": "基于 IP 获取当前位置",
         "parameters": {
             "type": "object",
             "properties": {},

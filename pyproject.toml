@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.136.3",
     "mcp>=1.0.0",
     "openai>=1.0.0",
+    "prometheus-client>=0.21.0",
     "prompt_toolkit>=3.0.0",
     "python-dotenv>=1.0",
     "python-jose>=3.5.0",
@@ -15,6 +16,9 @@ dependencies = [
     "rich>=13.0.0",
     "tiktoken>=0.13.0",
 ]
+
+[project.optional-dependencies]
+observability = ["langfuse>=2.0.0"]
 
 [project.scripts]
 chips = "agent.cli:main"
@@ -44,6 +48,8 @@ include = [
     "gateway*",
     "plugins*",
     "web*",
+    "knowledge*",
+    "rules*",
     "test*",
 ]
 

@@ -65,6 +65,8 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "name": record.name,
             "session": getattr(record, "session_id", ""),
+            "trace": getattr(record, "trace_id", ""),
+            "turn": getattr(record, "turn_number", 0),
             "msg": redact(record.getMessage()),
             "exc": redact(self.formatException(record.exc_info))
                    if record.exc_info else None,
@@ -92,7 +94,27 @@ class SessionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.session_id = self.session_id or "-"
+        record.trace_id = _current_trace_id or "-"
         return True
+
+
+class TurnFilter(logging.Filter):
+    """向日志记录注入 turn_number 属性（当前对话轮次）。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turn_number: int = 0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.turn_number = self.turn_number
+        return True
+
+
+# 全局单例，供 agent loop 在每轮对话前更新
+_turn_filter = TurnFilter()
+
+# 当前 Langfuse trace_id（由插件设置），贯穿日志
+_current_trace_id: str = ""
 
 
 class PrefixFilter(logging.Filter):
@@ -122,6 +144,7 @@ class LogManager:
     def __init__(self) -> None:
         self._chips = logging.getLogger("chips")
         self._session_filter = SessionFilter()
+        self._turn_filter = _turn_filter  # 全局单例
         self._managed: list[logging.Handler] = []
 
     @classmethod
@@ -149,7 +172,7 @@ class LogManager:
         self._chips.setLevel(level)
 
         self._session_filter.session_id = session_id
-        extra_filters = [self._session_filter]
+        extra_filters = [self._session_filter, self._turn_filter]
 
         # 1. 主日志 chips.log — JSON 格式，全量
         main_h = self._build_handler(
@@ -238,3 +261,20 @@ def get_logger(name: str = "") -> logging.Logger:
 
 def set_session_id(session_id: str) -> None:
     LogManager.instance().set_session_id(session_id)
+
+
+def set_turn_number(turn: int) -> None:
+    """设置当前对话轮次，后续日志记录将携带此 turn_number。"""
+    _turn_filter.turn_number = turn
+
+
+def set_trace_id(trace_id: str) -> None:
+    """设置当前 Langfuse trace_id，后续日志记录将携带此 trace_id。"""
+    global _current_trace_id
+    _current_trace_id = trace_id
+
+
+def clear_trace_id() -> None:
+    """清除当前 trace_id（trace 结束时调用）。"""
+    global _current_trace_id
+    _current_trace_id = ""

@@ -139,6 +139,7 @@ def run(args: object) -> None:
 
     # ── 3. 工具系统接线 ──
     agent_registry = _wire_tools(agent)
+    _wire_auto_plan(agent, args, agent_registry)
 
     # ── 4. 执行环境 ──
     os.environ["CHIPS_ENV"] = args.env
@@ -290,3 +291,27 @@ def _restore_or_create_session(agent: AIAgent, args: object) -> None:
                 print(f"已恢复会话 {session_id}（{len(agent.messages)} 条消息）")
     if not agent.session_id:
         agent.session_id = session_db.create_session()
+
+
+def _wire_auto_plan(agent, args, agent_registry):
+    """将 RuleEngine + LLMRouter 注入 Agent（如果启用了自动路由规划）。"""
+    use_auto_plan = args.auto_plan and not args.no_auto_plan
+    if not use_auto_plan:
+        return
+
+    from rules.engine import RuleEngine
+    rule_engine = RuleEngine(
+        include_defaults=True,
+        tool_names=agent.tool_names,
+    )
+    agent.auto_plan = True
+    agent._rule_engine = rule_engine
+    get_logger().info("rule_engine_loaded rules=%d", len(rule_engine.rules))
+
+    from rules.llm_router import LLMRouter
+    agent._llm_router = LLMRouter(
+        gateway=agent.gateway,
+        agent_registry=agent_registry,
+        model=agent.model,
+    )
+    get_logger().info("llm_router_loaded")

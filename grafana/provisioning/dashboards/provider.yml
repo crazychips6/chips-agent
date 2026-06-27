@@ -1,0 +1,12 @@
+# Grafana Dashboard 配置 — 自动导入 chips 仪表盘
+apiVersion: 1
+
+providers:
+  - name: chips
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards

@@ -193,6 +193,39 @@ class PluginManager:
                 )
         return result
 
+    def dispatch_llm_call_pre(
+        self, messages: list[dict], model: str, kwargs: dict,
+    ) -> dict:
+        """依次调用各 HookPlugin 的 ``on_llm_call_pre``。"""
+        for hook in self._hook_plugins:
+            if not hasattr(hook, "on_llm_call_pre"):
+                continue
+            try:
+                modified = hook.on_llm_call_pre(messages, model, kwargs)
+                if modified is not None:
+                    kwargs = modified
+            except Exception:
+                logger.exception(
+                    "hook_llm_call_pre_failed plugin=%s",
+                    getattr(hook, "name", type(hook).__name__),
+                )
+        return kwargs
+
+    def dispatch_llm_call_post(
+        self, messages: list[dict], model: str, result, duration_ms: int,
+    ) -> None:
+        """依次调用各 HookPlugin 的 ``on_llm_call_post``。"""
+        for hook in self._hook_plugins:
+            if not hasattr(hook, "on_llm_call_post"):
+                continue
+            try:
+                hook.on_llm_call_post(messages, model, result, duration_ms)
+            except Exception:
+                logger.exception(
+                    "hook_llm_call_post_failed plugin=%s",
+                    getattr(hook, "name", type(hook).__name__),
+                )
+
     def dispatch_response(self, response: str) -> str:
         """依次调用各 HookPlugin 的 ``on_response``。"""
         for hook in self._hook_plugins:

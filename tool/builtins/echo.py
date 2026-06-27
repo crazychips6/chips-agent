@@ -7,16 +7,16 @@ from tool.registry import registry
 
 registry.register(
     name="echo",
-    toolset="core",
+    toolset="test",
     schema={
         "type": "function",
         "function": {
             "name": "echo",
-            "description": "原样返回输入文本",
+            "description": "回显输入文本",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "要回显的文本"},
+                    "text": {"type": "string", "description": "文本"},
                 },
                 "required": ["text"],
             },

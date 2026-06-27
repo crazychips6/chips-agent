@@ -65,19 +65,27 @@ def _tool_summary(tool_name: str, args_str: str, result: str) -> str:
     content = result or ""
     line_count = content.count("\n") + 1 if content.strip() else 0
 
-    if tool_name == "terminal":
+    if tool_name == "bash":
         cmd = args.get("command", "")
         if len(cmd) > 60:
             cmd = cmd[:57] + "..."
-        return f"[terminal] `{cmd}` ({line_count} lines)"
+        return f"[bash] `{cmd}` ({line_count} lines)"
     if tool_name in ("read", "read_file"):
         return f"[read] {args.get('path', '?')} ({len(content)} chars)"
     if tool_name in ("write", "write_file"):
         return f"[write] {args.get('path', '?')} ({line_count} lines)"
     if tool_name in ("edit", "patch"):
         return f"[edit] {args.get('path', '?')} ({len(content)} chars)"
-    if tool_name in ("web_search", "web_fetch"):
-        return f"[{tool_name}] ({len(content)} chars)"
+    if tool_name == "file":
+        action = args.get("action", "read")
+        path = args.get("path", "?")
+        if action == "write":
+            return f"[file/write] {path} ({line_count} lines)"
+        if action == "search":
+            return f"[file/search] {path} ({len(content)} chars)"
+        return f"[file/read] {path} ({len(content)} chars)"
+    if tool_name == "web":
+        return f"[web/{args.get('action', '?')}] ({len(content)} chars)"
     if tool_name == "memory":
         return f"[memory] {args.get('action', '?')}"
     # fallback
@@ -394,16 +402,27 @@ Target ~{min(self.summary_max_tokens, 2000)} tokens. Be concrete — include fil
         compressed = messages[:head_end]
 
         if summary:
-            # 选择不跟首尾角色冲突的角色
-            last_head_role = messages[head_end - 1].get("role", "user") if head_end > 0 else "user"
-            first_tail_role = tail[0].get("role", "user") if tail else "user"
-            summary_role = "assistant" if last_head_role == "user" else "user"
-            if summary_role == first_tail_role:
-                summary_role = "assistant" if first_tail_role == "user" else "user"
-            compressed.append({"role": summary_role, "content": summary})
-        else:
-            # 摘要失败 → 简单截断（替代直接删除）
-            logger.warning("Summary failed, dropping %d middle messages without summary", len(middle))
+            # 摘要比原文还长 → 这叫膨胀，不是压缩
+            middle_chars = sum(_content_len(m.get("content") or "") for m in middle)
+            prefix_chars = len(_SUMMARY_PREFIX)
+            if _content_len(summary) + prefix_chars >= middle_chars and middle_chars > 0:
+                logger.info(
+                    "Summary (%d chars) >= middle region (%d chars) — skipping summary, using truncation",
+                    _content_len(summary) + prefix_chars, middle_chars,
+                )
+                summary = None
+            else:
+                # 选择不跟首尾角色冲突的角色
+                last_head_role = messages[head_end - 1].get("role", "user") if head_end > 0 else "user"
+                first_tail_role = tail[0].get("role", "user") if tail else "user"
+                summary_role = "assistant" if last_head_role == "user" else "user"
+                if summary_role == first_tail_role:
+                    summary_role = "assistant" if first_tail_role == "user" else "user"
+                compressed.append({"role": summary_role, "content": summary})
+
+        if not summary:
+            # 摘要失败/膨胀 → 简单截断中间区域（Phase 1 已裁剪 tool 结果，损失有限）
+            logger.warning("Compression fell back to truncation: dropping %d middle messages", len(middle))
 
         compressed.extend(tail)
 

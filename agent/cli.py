@@ -41,6 +41,10 @@ def _build_parser():
     parser.add_argument("--docker-image", default="alpine:latest",
                         help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
     parser.add_argument("--no-compress", action="store_true", help="禁用上下文压缩")
+    parser.add_argument("--auto-plan", action="store_true", default=False,
+                        help="启用自动路由规划（RuleEngine）")
+    parser.add_argument("--no-auto-plan", action="store_true", default=False,
+                        help="禁用自动路由规划")
 
     # 子命令
     subparsers = parser.add_subparsers(dest="command")
@@ -80,6 +84,25 @@ def _build_parser():
     web_cmd.add_argument("--host", default="0.0.0.0", help="监听地址")
     web_cmd.add_argument("--port", type=int, default=8648, help="监听端口")
 
+    # 子命令：chips insight
+    insight_cmd = subparsers.add_parser("insight", help="跨会话聚合报表")
+    insight_sub = insight_cmd.add_subparsers(dest="insight_action", required=True)
+    insight_sub.add_parser("cost", help="按模型费用排名").add_argument("--days", type=int, default=7)
+    insight_sub.add_parser("tools", help="工具使用统计").add_argument("--days", type=int, default=7)
+    insight_sub.add_parser("trend", help="每日费用趋势").add_argument("--days", type=int, default=30)
+    insight_portrait = insight_sub.add_parser("portrait", help="单会话完整画像")
+    insight_portrait.add_argument("session_id", help="会话 ID")
+    insight_sub.add_parser("weekly", help="一键周报")
+
+    # 子命令：chips router
+    router_cmd = subparsers.add_parser("router", help="管理路由规则")
+    router_sub = router_cmd.add_subparsers(dest="router_action", required=True)
+    router_sub.add_parser("list", help="列出所有路由规则")
+    router_sub.add_parser("test", help="运行规则测试用例")
+    router_sub.add_parser("summary", help="显示引擎统计")
+    router_sub.add_parser("init", help="初始化用户路由配置")
+    router_sub.add_parser("reload", help="重新加载配置后测试")
+
     return parser
 
 
@@ -107,6 +130,12 @@ def main():
         from plugins.cli import handle_plugin
         handle_plugin(args)
         return
+    if args.command == "insight":
+        _handle_insight(args)
+        return
+    if args.command == "router":
+        _handle_router(args)
+        return
 
     if args.version:
         print("chips 0.3.0")
@@ -122,6 +151,54 @@ def main():
     # ── 组装 + 启动（所有接线逻辑在 agent/boot.py） ──
     from agent.boot import run as boot_run
     boot_run(args)
+
+
+def _handle_insight(args) -> None:
+    """chips insight 子命令：跨会话聚合报表。"""
+    import os
+    from session.db import SessionDB
+    db_path = os.path.join(os.getcwd(), ".chips", "sessions.db")
+    if not os.path.isfile(db_path):
+        print(f"⚠ 数据库文件不存在: {db_path}")
+        return
+    db = SessionDB(db_path)
+    from agent.insights import InsightsEngine
+    engine = InsightsEngine(db)
+    if args.insight_action == "cost":
+        print(engine.cost_by_model(days=args.days).format())
+    elif args.insight_action == "tools":
+        print(engine.tool_usage(days=args.days).format())
+    elif args.insight_action == "trend":
+        print(engine.daily_cost_trend(days=args.days).format())
+    elif args.insight_action == "portrait":
+        print(engine.session_portrait(args.session_id).format())
+    elif args.insight_action == "weekly":
+        print(engine.weekly_report().format())
+
+
+def _handle_router(args) -> None:
+    """chips router 子命令：管理路由规则。"""
+    from rules.engine import RuleEngine
+    engine = RuleEngine(include_defaults=True)
+    if args.router_action == "list":
+        print(f"路由规则 (共 {len(engine.rules)} 条):")
+        for r in engine.rules:
+            print(f"  [{r.priority:4d}] {r.name:30s} -> {r.then:20s} # {r.reason}")
+    elif args.router_action == "test":
+        results = engine.test_rules()
+        passed = sum(1 for r in results if r["passed"])
+        for r in results:
+            status = "✅" if r["passed"] else "❌"
+            print(f"  {status} {r['rule']}: expected={r['expected']} got={r['got']} input={r['input'][:50]}")
+        print(f"\n{passed}/{len(results)} 通过")
+    elif args.router_action == "summary":
+        print(engine.summary())
+    elif args.router_action == "init":
+        from rules.loader import write_default_config
+        print(write_default_config())
+    elif args.router_action == "reload":
+        engine.reload()
+        print(f"已重新加载 {len(engine.rules)} 条规则")
 
 
 if __name__ == "__main__":

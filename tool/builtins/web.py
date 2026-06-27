@@ -291,52 +291,39 @@ def _parse_ddg_results(html: str) -> list[tuple[str, str, str]]:
 
 # ── Register ──
 
-registry.register(
-    name="web_fetch",
-    toolset="web",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "【成本：1 步】获取网页内容，返回纯文本。自动提取 HTML 正文、跳过内网地址、限制响应大小为 5MB。如果已知 URL 应优先使用此工具，比 web_search 更高效。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "要获取的 URL（http/https），可不带 scheme 自动补全 https://",
-                    },
-                },
-                "required": ["url"],
+import json
+
+
+def _handle(args: dict) -> str:
+    action = args.get("action", "")
+    if action == "fetch":
+        return _fetch_handler(args)
+    elif action == "search":
+        return _search_handler(args)
+    return json.dumps({"error": f"未知操作: {action}（支持: fetch, search）"})
+
+
+WEB_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "web",
+        "description": "获取网页或搜索互联网",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["fetch", "search"], "description": "fetch=获取网页, search=搜索"},
+                "url": {"type": "string", "description": "要获取的 URL（fetch 使用）"},
+                "query": {"type": "string", "description": "搜索关键词（search 使用）"},
+                "max_results": {"type": "integer", "description": "最大结果数（search，默认 10，最大 20）"},
             },
+            "required": ["action"],
         },
     },
-    handler=_fetch_handler,
-)
+}
 
 registry.register(
-    name="web_search",
+    name="web",
     toolset="web",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "【成本：2 步】搜索互联网，返回标题、链接和摘要。使用 收费api 搜索。仅在不知道具体 URL 时使用；如果已知 URL 应使用 web_fetch（成本更低）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "搜索关键词",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "最大返回结果数（1-20，默认 10）",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    handler=_search_handler,
+    schema=WEB_SCHEMA,
+    handler=_handle,
 )

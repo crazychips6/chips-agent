@@ -288,110 +288,49 @@ def _search_file(fp: Path, pattern: str, match_fn, results: list, max_results: i
 
 # ── Register ──
 
-registry.register(
-    name="file_read",
-    toolset="file",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "file_read",
-            "description": "读取本地文件内容，返回文件文本。支持行范围读取。不能读取 .env、密钥文件等敏感文件。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件路径，相对路径或绝对路径",
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "起始行号（可选，从 1 开始）。指定后返回行号前缀的输出格式",
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "结束行号（可选，包含），需配合 start_line 使用",
-                    },
-                },
-                "required": ["path"],
+import json
+
+
+def _handle(args: dict) -> str:
+    action = args.get("action", "")
+    if action == "read":
+        return _read_handler(args)
+    elif action == "write":
+        return _write_handler(args)
+    elif action == "search":
+        return _search_handler(args)
+    return json.dumps({"error": f"未知操作: {action}（支持: read, write, search）"})
+
+
+FILE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "file",
+        "description": "读/写/搜索文件",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["read", "write", "search"], "description": "操作类型"},
+                "path": {"type": "string", "description": "文件/目录路径"},
+                "content": {"type": "string", "description": "写入内容（write 使用）"},
+                "mode": {"type": "string", "enum": ["write", "append", "patch"], "description": "写入模式（write 使用）"},
+                "search": {"type": "string", "description": "patch 的搜索文本（write 使用）"},
+                "replace": {"type": "string", "description": "patch 的替换文本（write 使用）"},
+                "start_line": {"type": "integer", "description": "起始行号（read 使用，从 1 开始）"},
+                "end_line": {"type": "integer", "description": "结束行号（read 使用，含）"},
+                "pattern": {"type": "string", "description": "搜索模式（search 使用）"},
+                "pattern_type": {"type": "string", "enum": ["text", "regex"], "description": "搜索类型（search 使用）"},
+                "max_results": {"type": "integer", "description": "最大结果数（search 使用，默认 50）"},
             },
+            "required": ["action"],
         },
     },
-    handler=_read_handler,
-)
+}
 
 registry.register(
-    name="file_write",
+    name="file",
     toolset="file",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "file_write",
-            "description": "将内容写入本地文件。支持 write（覆盖）、append（追加）、patch（搜索替换）三种模式。不允许写入 /etc/、.git/ 等敏感目录。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件路径",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "文件内容（patch 模式下无需此参数）",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["write", "append", "patch"],
-                        "description": "write=覆盖, append=追加, patch=搜索替换第一个匹配",
-                    },
-                    "search": {
-                        "type": "string",
-                        "description": "patch 模式下要搜索的文本",
-                    },
-                    "replace": {
-                        "type": "string",
-                        "description": "patch 模式的替换文本",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    handler=_write_handler,
-)
-
-registry.register(
-    name="file_search",
-    toolset="file",
-    schema={
-        "type": "function",
-        "function": {
-            "name": "file_search",
-            "description": "在指定目录中搜索包含指定文本的文件（类似 grep）。返回匹配的文件路径、行号和内容片段。跳过 .git/、node_modules/ 等目录。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "搜索的目录或文件路径，默认当前目录",
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "搜索模式（text 模式不区分大小写，regex 模式区分大小写）",
-                    },
-                    "pattern_type": {
-                        "type": "string",
-                        "enum": ["text", "regex"],
-                        "description": "搜索类型：text=纯文本匹配（默认，不区分大小写），regex=正则表达式",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "最大返回结果数，默认 50",
-                    },
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    handler=_search_handler,
+    schema=FILE_SCHEMA,
+    handler=_handle,
 )
 
