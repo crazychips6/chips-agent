@@ -219,12 +219,6 @@ class AIAgent:
         active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
         perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
         self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
-
-        # 条件式暴露：有子 Agent 执行记录时才暴露子 Agent 查询工具
-        if self._sub_agent_manager.list_all():
-            sub_agent_tools = set(resolve_multiple_toolsets(["sub_agent"]))
-            self.tool_names |= sub_agent_tools & self.registry.tool_names
-
         self.tool_names &= self.registry.tool_names
 
     # ── 子 Agent 管理 ──
