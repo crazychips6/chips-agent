@@ -97,6 +97,37 @@ class SessionDB:
 
                 CREATE INDEX IF NOT EXISTS idx_usage_session
                     ON usage_log(session_id, id);
+
+                CREATE TABLE IF NOT EXISTS sub_agents (
+                    id              TEXT PRIMARY KEY,
+                    session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    parent_id       TEXT,
+                    agent_name      TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    task            TEXT DEFAULT '',
+                    output          TEXT DEFAULT '',
+                    error           TEXT DEFAULT '',
+                    prompt_tokens   INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    tool_calls      TEXT DEFAULT '[]',
+                    started_at      REAL NOT NULL,
+                    completed_at    REAL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_sub_agents_session
+                    ON sub_agents(session_id, status);
+
+                CREATE TABLE IF NOT EXISTS sub_agent_events (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sub_agent_id    TEXT NOT NULL REFERENCES sub_agents(id) ON DELETE CASCADE,
+                    from_status     TEXT NOT NULL,
+                    to_status       TEXT NOT NULL,
+                    timestamp       REAL NOT NULL,
+                    metadata        TEXT DEFAULT '{}'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_sub_agent_events_id
+                    ON sub_agent_events(sub_agent_id, id);
             """)
 
     # ── Session CRUD ──
@@ -463,6 +494,64 @@ class SessionDB:
         }
 
     # ── Helpers ──
+
+    # ── 子 Agent 持久化 ──
+
+    def save_sub_agent(self, record: dict) -> None:
+        """写入或更新一条子 Agent 记录。"""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO sub_agents
+                   (id, session_id, parent_id, agent_name, status, task,
+                    output, error, prompt_tokens, completion_tokens,
+                    tool_calls, started_at, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record["id"],
+                    record.get("session_id", ""),
+                    record.get("parent_id"),
+                    record["agent_name"],
+                    record["status"],
+                    record["task"],
+                    record.get("output", ""),
+                    record.get("error", ""),
+                    record.get("prompt_tokens", 0),
+                    record.get("completion_tokens", 0),
+                    json.dumps(record.get("tool_calls", [])),
+                    record["started_at"],
+                    record.get("completed_at"),
+                ),
+            )
+
+    def get_session_sub_agents(self, session_id: str) -> list[dict]:
+        """查询某会话的所有子 Agent 记录。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sub_agents WHERE session_id = ? ORDER BY started_at",
+                (session_id,),
+            ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["tool_calls"] = json.loads(d.get("tool_calls") or "[]")
+            result.append(d)
+        return result
+
+    def save_sub_agent_event(
+        self,
+        sub_agent_id: str,
+        from_status: str,
+        to_status: str,
+        *,
+        metadata: str = "{}",
+    ) -> None:
+        """记录子 Agent 状态变更事件。"""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO sub_agent_events (sub_agent_id, from_status, to_status, timestamp, metadata) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (sub_agent_id, from_status, to_status, time.time(), metadata),
+            )
 
     @staticmethod
     def _generate_id(now: float) -> str:

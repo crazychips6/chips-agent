@@ -168,6 +168,12 @@ def run(args: object) -> None:
     recorder._session_db = session_db
     recorder._session_id = agent.session_id
 
+    # 子 Agent 持久化：绑定 session 后恢复历史记录
+    agent._sub_agent_manager.set_session(session_db, agent.session_id)
+    restored = agent._sub_agent_manager.restore(agent.session_id)
+    if restored:
+        get_logger().info("sub_agent_history_restored count=%d", restored)
+
     # ── 7. 日志 + TUI + 技能系统 ──
     setup_logging(session_id=agent.session_id)
     get_logger().info("session started")

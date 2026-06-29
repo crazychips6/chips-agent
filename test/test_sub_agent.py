@@ -133,6 +133,23 @@ class TestSubAgentManager:
         mgr.create("b", "t2")
         assert len(mgr.list_all()) == 2
 
+    def test_to_list_item_converts_status(self):
+        mgr = SubAgentManager()
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        items = mgr.list("test")
+        assert len(items) == 1
+        assert items[0]["status"] == "running"  # 字符串，非枚举
+
+    def test_get_sub_agent_result_status_string(self):
+        mgr = SubAgentManager()
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        record = mgr.get(rid)
+        from dataclasses import asdict
+        d = asdict(record)
+        assert hasattr(d["status"], "value")  # asdict 保留枚举
+
     def test_max_history(self):
         mgr = SubAgentManager(max_history_per_role=3)
         ids = []
@@ -149,3 +166,90 @@ class TestSubAgentManager:
         assert mgr.get(ids[2]) is not None
         assert mgr.get(ids[3]) is not None
         assert mgr.get(ids[4]) is not None
+
+
+# ── 持久化测试（依赖 SessionDB） ──
+
+
+class TestSubAgentPersistence:
+    @pytest.fixture
+    def session_db(self, tmp_path):
+        from session.db import SessionDB
+        db = SessionDB(str(tmp_path / "test.db"))
+        return db
+
+    def test_persist_on_create(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        rid = mgr.create("researcher", "搜索任务")
+        rows = session_db.get_session_sub_agents(session_id)
+        assert len(rows) == 1
+        assert rows[0]["id"] == rid
+        assert rows[0]["agent_name"] == "researcher"
+        assert rows[0]["status"] == "created"
+
+    def test_persist_on_update(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        rid = mgr.create("researcher", "搜索任务")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.COMPLETED, output="完成")
+        rows = session_db.get_session_sub_agents(session_id)
+        assert len(rows) == 1
+        assert rows[0]["status"] == "completed"
+        assert rows[0]["output"] == "完成"
+
+    def test_event_logged_on_transition(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        rid = mgr.create("researcher", "搜索任务")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        # 直接查 DB 确认事件表有记录
+        with session_db._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sub_agent_events WHERE sub_agent_id = ?", (rid,)
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["from_status"] == "created"
+        assert rows[0]["to_status"] == "running"
+
+    def test_restore_history(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        mgr.create("researcher", "搜1")
+        rid = mgr.create("coder", "写1")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.COMPLETED, output="代码完成")
+
+        # 新建一个 Manager，从 DB 恢复
+        mgr2 = SubAgentManager()
+        mgr2.set_session(session_db, session_id)
+        count = mgr2.restore(session_id)
+        assert count == 2
+        assert mgr2.get(rid) is not None
+        record = mgr2.get(rid)
+        assert record is not None
+        assert record.status == AgentStatus.COMPLETED
+        assert record.output == "代码完成"
+
+    def test_restore_empty(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        count = mgr.restore(session_id)
+        assert count == 0
+
+    def test_capture_result_persists(self, session_db):
+        mgr = SubAgentManager()
+        session_id = session_db.create_session("test")
+        mgr.set_session(session_db, session_id)
+        rid = mgr.create("researcher", "搜索")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.capture_result(rid, [], "搜索完成", error=None)
+        rows = session_db.get_session_sub_agents(session_id)
+        assert rows[0]["status"] == "completed"
+        assert rows[0]["output"] == "搜索完成"

@@ -144,17 +144,87 @@ def _estimate_messages_tokens(messages: list[dict]) -> tuple[int, int]:
 
 
 class SubAgentManager:
-    """子 Agent 生命周期 + 结果存储 + 检索。
+    """子 Agent 生命周期 + 结果存储 + 检索 + 持久化。
 
     内部以 role_name → list[SubAgentRecord] 组织，
     同时维护 id → record 的扁平索引方便查询。
     每角色最多保留 max_history_per_role 条记录（淘汰最旧的）。
+
+    可选对接 SessionDB 实现持久化：
+      manager.set_session(session_db, session_id)
+      manager.restore(session_id)  # 启动时恢复历史
     """
 
     def __init__(self, max_history_per_role: int = 5):
         self._max = max_history_per_role
         self._agents: dict[str, list[SubAgentRecord]] = {}
         self._by_id: dict[str, SubAgentRecord] = {}
+        self._session_db: Any = None
+        self._session_id: str = ""
+
+    def set_session(self, session_db: Any, session_id: str) -> None:
+        """绑定会话上下文，后续 create/update 自动持久化。"""
+        self._session_db = session_db
+        self._session_id = session_id
+
+    def restore(self, session_id: str) -> int:
+        """从数据库恢复该会话的历史子 Agent 记录。
+
+        Returns:
+            恢复的记录条数
+        """
+        if not self._session_db:
+            return 0
+        rows = self._session_db.get_session_sub_agents(session_id)
+        count = 0
+        for row in rows:
+            rid = row["id"]
+            if rid in self._by_id:
+                continue
+            record = SubAgentRecord(
+                id=rid,
+                agent_name=row["agent_name"],
+                task=row["task"],
+                started_at=row["started_at"],
+                status=AgentStatus(row["status"]),
+                completed_at=row.get("completed_at"),
+                output=row.get("output", ""),
+                error=row.get("error", ""),
+                prompt_tokens=row.get("prompt_tokens", 0),
+                completion_tokens=row.get("completion_tokens", 0),
+                tool_calls=row.get("tool_calls", []),
+            )
+            self._by_id[rid] = record
+            agent_name = record.agent_name
+            if agent_name not in self._agents:
+                self._agents[agent_name] = []
+            self._agents[agent_name].append(record)
+            count += 1
+        self._session_id = session_id
+        return count
+
+    def _persist(self, record: SubAgentRecord) -> None:
+        """将记录写入数据库（如果已绑定 session）。"""
+        if not self._session_db or not self._session_id:
+            return
+        try:
+            d = asdict(record)
+            d["status"] = record.status.value
+            d["session_id"] = self._session_id
+            self._session_db.save_sub_agent(d)
+        except Exception as exc:
+            logger.error("sub_agent_persist_failed id=%s error=%s", record.id, exc)
+
+    def _log_event(
+        self, record_id: str, from_status: str, to_status: str
+    ) -> None:
+        """记录状态变更事件到 DB。"""
+        if not self._session_db:
+            return
+        try:
+            self._session_db.save_sub_agent_event(record_id, from_status, to_status)
+        except Exception as exc:
+            logger.error("sub_agent_event_failed id=%s error=%s", record_id, exc)
 
     # ── 生命周期 ──
 
@@ -174,6 +244,9 @@ class SubAgentManager:
         if agent_name not in self._agents:
             self._agents[agent_name] = []
         self._agents[agent_name].append(record)
+
+        # 写入 DB
+        self._persist(record)
 
         # 淘汰超限：保留最新的 max 条
         if len(self._agents[agent_name]) > self._max:
@@ -195,17 +268,24 @@ class SubAgentManager:
         if record is None:
             raise ValueError(f"Unknown sub-agent id: {id}")
 
-        # 状态转换校验
+        # 状态转换校验 + 事件记录
+        old_status: str | None = None
         if "status" in fields:
             new_status = fields["status"]
             if isinstance(new_status, str):
                 new_status = AgentStatus(new_status)
             AgentStatus.validate_transition(record.status, new_status)
+            old_status = record.status.value
             fields["status"] = new_status
 
         for k, v in fields.items():
             if hasattr(record, k):
                 setattr(record, k, v)
+
+        # 持久化 + 事件
+        self._persist(record)
+        if old_status is not None:
+            self._log_event(id, old_status, record.status.value)
 
     # ── 结果捕获（子 Agent 执行完毕后调用） ──
 
@@ -281,5 +361,12 @@ class SubAgentManager:
 
     @staticmethod
     def _to_list_item(r: SubAgentRecord) -> dict:
-        """转成 list 所用的精简输出（跳过 messages）。"""
-        return {k: v for k, v in asdict(r).items() if k != "messages"}
+        """转成 list 所用的精简输出（跳过 messages，枚举转值）。"""
+        d = {}
+        for k, v in asdict(r).items():
+            if k == "messages":
+                continue
+            if isinstance(v, AgentStatus):
+                v = v.value
+            d[k] = v
+        return d

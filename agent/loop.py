@@ -261,7 +261,7 @@ class AIAgent:
             子 Agent 记录的 id（用于后续 get_sub_agent_result 查询）
         """
         record_id = self._sub_agent_manager.create(agent_name, task)
-        self._sub_agent_manager.update(record_id, status="running")
+        self._sub_agent_manager.update(record_id, status="running")  # str → AgentStatus 自动转换
 
         try:
             from tool.builtins.agent_tools import build_sub_agent
@@ -302,7 +302,11 @@ class AIAgent:
         if record is None:
             return None
         from dataclasses import asdict
-        return asdict(record)
+        result = asdict(record)
+        # 枚举转字符串值，确保 JSON 序列化正确
+        if "status" in result and hasattr(result["status"], "value"):
+            result["status"] = result["status"].value
+        return result
 
     # ── 安全拦截 + 端侧快速通道 ──
 
