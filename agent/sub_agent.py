@@ -16,10 +16,13 @@ Usage::
 from __future__ import annotations
 
 import enum
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Callable
+
+logger = logging.getLogger("chips.agent.sub_agent")
 
 
 class AgentStatus(enum.Enum):
@@ -161,6 +164,33 @@ class SubAgentManager:
         self._by_id: dict[str, SubAgentRecord] = {}
         self._session_db: Any = None
         self._session_id: str = ""
+        # 生命周期钩子: event → [fn(record), ...]
+        self._hooks: dict[str, list[Callable]] = {
+            "created": [],
+            "running": [],
+            "completed": [],
+            "failed": [],
+            "cancelled": [],
+        }
+
+    def on(self, event: str, fn: Callable) -> None:
+        """注册生命周期钩子。event: created/running/completed/failed/cancelled。"""
+        if event in self._hooks:
+            self._hooks[event].append(fn)
+
+    def off(self, event: str, fn: Callable) -> None:
+        """移除已注册的钩子。"""
+        if event in self._hooks and fn in self._hooks[event]:
+            self._hooks[event].remove(fn)
+
+    def _emit(self, event: str, record: SubAgentRecord) -> None:
+        """触发生命周期钩子（异常安全）。"""
+        for fn in self._hooks.get(event, []):
+            try:
+                fn(record)
+            except Exception as exc:
+                logger.error("sub_agent_hook_error event=%s fn=%s error=%s",
+                             event, getattr(fn, "__name__", "?"), exc)
 
     def set_session(self, session_db: Any, session_id: str) -> None:
         """绑定会话上下文，后续 create/update 自动持久化。"""
@@ -248,6 +278,9 @@ class SubAgentManager:
         # 写入 DB
         self._persist(record)
 
+        # 触发钩子
+        self._emit("created", record)
+
         # 淘汰超限：保留最新的 max 条
         if len(self._agents[agent_name]) > self._max:
             removed = self._agents[agent_name].pop(0)
@@ -282,10 +315,11 @@ class SubAgentManager:
             if hasattr(record, k):
                 setattr(record, k, v)
 
-        # 持久化 + 事件
+        # 持久化 + 事件 + 钩子
         self._persist(record)
         if old_status is not None:
             self._log_event(id, old_status, record.status.value)
+            self._emit(record.status.value, record)
 
     # ── 结果捕获（子 Agent 执行完毕后调用） ──
 

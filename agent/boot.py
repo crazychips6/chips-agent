@@ -141,6 +141,7 @@ def run(args: object) -> None:
     agent_registry = _wire_tools(agent)
     _wire_guard_engine(agent)
     _wire_fast_llm(agent)
+    _wire_sub_agent_hooks(agent)
 
     # ── 4. 执行环境 ──
     os.environ["CHIPS_ENV"] = args.env
@@ -321,3 +322,68 @@ def _wire_fast_llm(agent):
     from endpoint.fast_llm import FastLLM
     agent._fast_llm = FastLLM()
     get_logger().info("fast_llm_initialized")
+
+
+def _wire_sub_agent_hooks(agent):
+    """注册子 Agent 生命周期钩子 → Prometheus 指标。
+
+    不阻塞：钩子异常不影响主流程。
+    """
+    mgr = agent._sub_agent_manager
+
+    try:
+        from gateway.metrics import (
+            agent_calls_total,
+            agent_duration_seconds,
+            agent_tokens_total,
+            agent_concurrent,
+        )
+
+        # 并发计数
+        _running: dict[str, int] = {}
+
+        def _on_created(record):
+            # 预置并发计数为 0（确保 Gauge 有 label）
+            name = record.agent_name
+            if name not in _running:
+                _running[name] = 0
+                agent_concurrent.labels(agent_name=name).set(0)
+
+        def _on_running(record):
+            name = record.agent_name
+            _running[name] = _running.get(name, 0) + 1
+            agent_concurrent.labels(agent_name=name).set(_running[name])
+
+        def _on_completed(record):
+            name = record.agent_name
+            _running[name] = max(0, _running.get(name, 0) - 1)
+            agent_concurrent.labels(agent_name=name).set(_running.get(name, 0))
+            agent_calls_total.labels(agent_name=name, status="completed").inc()
+            if record.started_at and record.completed_at:
+                duration = record.completed_at - record.started_at
+                agent_duration_seconds.labels(agent_name=name).observe(duration)
+            agent_tokens_total.labels(agent_name=name, token_type="prompt").inc(record.prompt_tokens)
+            agent_tokens_total.labels(agent_name=name, token_type="completion").inc(record.completion_tokens)
+
+        def _on_failed(record):
+            name = record.agent_name
+            _running[name] = max(0, _running.get(name, 0) - 1)
+            agent_concurrent.labels(agent_name=name).set(_running.get(name, 0))
+            agent_calls_total.labels(agent_name=name, status="failed").inc()
+
+        def _on_cancelled(record):
+            name = record.agent_name
+            _running[name] = max(0, _running.get(name, 0) - 1)
+            agent_concurrent.labels(agent_name=name).set(_running.get(name, 0))
+
+        mgr.on("created", _on_created)
+        mgr.on("running", _on_running)
+        mgr.on("completed", _on_completed)
+        mgr.on("failed", _on_failed)
+        mgr.on("cancelled", _on_cancelled)
+
+        get_logger().info("sub_agent_hooks_registered")
+    except ImportError:
+        get_logger().info("sub_agent_hooks_skipped: prometheus_client not available")
+    except Exception as exc:
+        get_logger().warning("sub_agent_hooks_error: %s", exc)

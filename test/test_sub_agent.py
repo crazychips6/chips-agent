@@ -253,3 +253,79 @@ class TestSubAgentPersistence:
         rows = session_db.get_session_sub_agents(session_id)
         assert rows[0]["status"] == "completed"
         assert rows[0]["output"] == "搜索完成"
+
+
+# ── 钩子测试 ──
+
+
+class TestSubAgentHooks:
+    def test_on_created_fired(self):
+        mgr = SubAgentManager()
+        fired = []
+        mgr.on("created", lambda r: fired.append(r.id))
+        rid = mgr.create("test", "t")
+        assert len(fired) == 1
+        assert fired[0] == rid
+
+    def test_on_running_fired(self):
+        mgr = SubAgentManager()
+        fired = []
+        mgr.on("running", lambda r: fired.append(r.id))
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        assert len(fired) == 1
+        assert fired[0] == rid
+
+    def test_on_completed_fired(self):
+        mgr = SubAgentManager()
+        fired = []
+        mgr.on("completed", lambda r: fired.append(r.id))
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.COMPLETED)
+        assert len(fired) == 1
+
+    def test_on_failed_fired(self):
+        mgr = SubAgentManager()
+        fired = []
+        mgr.on("failed", lambda r: fired.append(r.id))
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.FAILED)
+        assert len(fired) == 1
+
+    def test_on_cancelled_fired(self):
+        mgr = SubAgentManager()
+        fired = []
+        mgr.on("cancelled", lambda r: fired.append(r.id))
+        rid = mgr.create("test", "t")
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.CANCELLED)
+        assert len(fired) == 1
+
+    def test_hook_exception_does_not_crash(self):
+        mgr = SubAgentManager()
+
+        def _boom(record):
+            raise RuntimeError("boom")
+
+        mgr.on("created", _boom)
+        rid = mgr.create("test", "t")  # 不应该抛异常
+        assert rid is not None
+
+    def test_off_removes_hook(self):
+        mgr = SubAgentManager()
+        fired = []
+        fn = lambda r: fired.append(r.id)
+        mgr.on("created", fn)
+        mgr.off("created", fn)
+        mgr.create("test", "t")
+        assert len(fired) == 0
+
+    def test_multiple_hooks_same_event(self):
+        mgr = SubAgentManager()
+        results = []
+        mgr.on("created", lambda r: results.append("a"))
+        mgr.on("created", lambda r: results.append("b"))
+        mgr.create("test", "t")
+        assert results == ["a", "b"]

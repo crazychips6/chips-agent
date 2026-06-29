@@ -57,6 +57,33 @@ tool_duration_seconds = Histogram(
     buckets=[.1, .5, 1, 2, 5, 10, 30],
 )
 
+# ── 子 Agent ──
+
+agent_calls_total = Counter(
+    "chips_agent_calls_total",
+    "Total sub-agent executions",
+    ["agent_name", "status"],
+)
+
+agent_duration_seconds = Histogram(
+    "chips_agent_duration_seconds",
+    "Sub-agent execution duration",
+    ["agent_name"],
+    buckets=[1, 5, 10, 30, 60, 120, 300],
+)
+
+agent_tokens_total = Counter(
+    "chips_agent_tokens_total",
+    "Sub-agent token consumption",
+    ["agent_name", "token_type"],
+)
+
+agent_concurrent = Gauge(
+    "chips_agent_concurrent",
+    "Currently running sub-agents",
+    ["agent_name"],
+)
+
 # ── 系统 ──
 
 session_active = Gauge(
