@@ -32,10 +32,7 @@ from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
 
 def _wire_tools(agent):
-    """接线 toolset / agent registry / todo store。返回 AgentRegistry 实例。"""
-    from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
-    wire_toolset_agent(agent)
-
+    """接线 agent registry / todo store。返回 AgentRegistry 实例。"""
     from tool.builtins.agent_tools import wire_parent, wire_registry
     wire_parent(agent)
 

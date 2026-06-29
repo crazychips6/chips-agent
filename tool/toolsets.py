@@ -19,7 +19,7 @@ from typing import Any
 
 # 始终暴露给 LLM 的核心工具名（不受 hot zone / permanent 影响）
 # 这些工具的 schema 每轮都在 tools 参数中，LLM 永远可以调用
-CORE_ALWAYS_ON = {"clarify", "todo", "toolset", "orchestrate"}
+CORE_ALWAYS_ON = {"clarify", "todo", "orchestrate"}
 
 # ── 静态定义 ──
 
@@ -36,13 +36,12 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "todo":     {"description": "任务规划"},
     "clarify":  {"description": "向用户追问"},
     "calendar": {"description": "日程管理"},
-    "geo":      {"description": "地理位置查询"},
     "system":   {"description": "系统信息（OS/CPU/内存）"},
     "process":  {"description": "进程管理"},
     "sub_agent": {"description": "子 Agent 执行记录查询"},
     "all": {
         "description": "全部可用工具",
-        "includes": ["core", "web", "vision", "skills", "calendar", "geo", "system", "process"],
+        "includes": ["core", "web", "vision", "skills", "calendar", "system", "process"],
     },
 }
 

@@ -191,10 +191,6 @@ def get_agent():
             agent.tool_names |= set(mcp_mgr.get_all_tool_names())
             agent._extra_tool_names |= set(mcp_mgr.get_all_tool_names())
 
-        # ── toolset 工具接线 ──
-        from tool.builtins.toolset_tool import wire_agent as wire_toolset_agent
-        wire_toolset_agent(agent)
-
         # ── TodoStore（模块级，供 todo 工具使用） ──
         from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
         wire_todo_store(TodoStore())
