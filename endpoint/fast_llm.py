@@ -1,9 +1,9 @@
 """FastLLM — 端侧小模型快速通道
 
 在 GuardEngine（安全拦截）之后、ReAct 循环之前插入。
-只问一个问题："端侧小模型能直接回复吗？"
-  能 → 直接回复，省一次 API 调用
-  不能 → 放行进 ReAct
+
+小模型只做三件事：问候、致谢、告别。
+在这三个范围内自由回复，其他一律放行进 ReAct。
 
 不可用时无缝降级（Ollama 不通 → 跳过）。
 """
@@ -17,51 +17,29 @@ import urllib.request
 
 logger = logging.getLogger("chips.endpoint.fast_llm")
 
-_FAST_PROMPT = """判断能否直接回复。输出 {"confident": true/false, "reply": "..."}
+_CLASSIFY_PROMPT = """你是一个消息分类器。判断用户消息属于哪一类，只输出类别名。
 
-可自信回复的场景（confident=true）：
-- 问候、感谢、道别
-- 纯百科常识（首都、数学、定义等不需要搜索的知识）
-- 闲聊
-
-必须放行的场景（confident=false）：
-- 需要搜索、查询、查找信息
-- 需要执行命令或代码
-- 需要操作文件
-- 复杂或多步骤任务
-- 需要实时信息（天气、新闻、股价等）
-- 不确定答案
+类别：
+- greeting: 问候、打招呼（你好/hi/hello/早上好）
+- thanks: 感谢、致谢（谢谢/感谢/多谢）
+- goodbye: 告别、再见（再见/拜拜/bye）
+- other: 以上都不属于
 
 示例：
-你好 → {"confident": true, "reply": "你好！"}
-谢谢 → {"confident": true, "reply": "不客气！"}
-中国的首都是哪里 → {"confident": true, "reply": "北京"}
-1+1等于几 → {"confident": true, "reply": "2"}
-搜索最新的AI框架 → {"confident": false, "reply": ""}
-帮我查一下Rust和Go的对比 → {"confident": false, "reply": ""}
-帮我写个Python脚本 → {"confident": false, "reply": ""}
-今天天气怎么样 → {"confident": false, "reply": ""}
-读readme.md → {"confident": false, "reply": ""}
-分析这份报告 → {"confident": false, "reply": ""}
+  你好 → greeting
+  谢谢 → thanks
+  再见 → goodbye
+  帮我搜索一下 → other
+  今天天气怎么样 → other
+  调查这个文件 → other
 
-只输出JSON。"""
-
-# 触发放行的关键词 — 包含这些词的请求不经过小模型，直接放行进 ReAct
-_TRIGGER_KEYWORDS = [
-    "搜索", "查一", "查查", "查找", "查询", "搜一",
-    "写代码", "写个", "写一个", "编写",
-    "读文件", "读一下", "读取", "打开文件",
-    "执行", "运行", "安装", "下载",
-    "天气", "新闻", "股票", "股价",
-    "最新", "对比", "分析", "总结",
-    "翻译", "代码", "脚本", "命令",
-]
+只输出类别名，不要其他内容。"""
 
 
 class FastLLM:
     """端侧小模型快速通道。
 
-    使用 Ollama 上的小模型做低成本的直接回复。
+    只处理 greeting / thanks / goodbye 三类，其他全放行。
     """
 
     OLLAMA_BASE = "http://localhost:11434"
@@ -73,10 +51,6 @@ class FastLLM:
     # ── 可用性检测 ──
 
     def is_available(self) -> bool:
-        """检测 Ollama 是否可访问。
-
-        缓存策略：可用时缓存，不可用时不缓存（隧道恢复后可自动重连）。
-        """
         if self._available is True:
             return True
         try:
@@ -93,39 +67,38 @@ class FastLLM:
         return self._available
 
     def reset_availability(self):
-        """清除可用性缓存，下次 is_available() 重新检测。"""
         self._available = None
 
-    # ── 快速回复 ──
+    # ── 分类 + 回复 ──
 
     def answer(self, user_message: str) -> str | None:
-        """尝试用端侧小模型直接回复。
+        """尝试用端侧小模型回复。
 
-        Args:
-            user_message: 用户消息
+        先分类，只有 greeting/thanks/goodbye 才回复，其他放行。
 
         Returns:
-            自信能答 → 回复文本
-            没把握    → None（放行进 ReAct）
+            回复文本（greeting/thanks/goodbye）
+            None（other → 放行进 ReAct）
         """
-        # 前置关键词检：含"搜索""写代码""读文件"等关键字的请求直接放行
-        msg_lower = user_message.lower()
-        for kw in _TRIGGER_KEYWORDS:
-            if kw in msg_lower:
-                logger.debug("fast_llm_trigger_skip keyword=%s msg=%s", kw, user_message[:40])
-                return None
+        category = self._classify(user_message)
+        if category == "other":
+            return None
+        if category:
+            return self._reply(category, user_message)
+        return None
 
+    def _classify(self, user_message: str) -> str | None:
+        """分类用户消息。返回 greeting / thanks / goodbye / other / None（失败时）。"""
         payload = json.dumps({
             "model": self.MODEL,
-            "format": "json",
             "messages": [
-                {"role": "system", "content": _FAST_PROMPT},
+                {"role": "system", "content": _CLASSIFY_PROMPT},
                 {"role": "user", "content": user_message},
             ],
             "stream": False,
             "options": {
-                "temperature": 0.1,
-                "num_predict": 128,
+                "temperature": 0.0,
+                "num_predict": 16,
             },
         }).encode()
 
@@ -139,23 +112,58 @@ class FastLLM:
         try:
             resp = urllib.request.urlopen(req, timeout=10)
             body = json.loads(resp.read())
-            content = body.get("message", {}).get("content", "")
-            content = content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                content = "\n".join(lines[1:-1]) if len(lines) > 2 else lines[-1]
-            result = json.loads(content)
-
-            if result.get("confident") and result.get("reply"):
-                reply = result["reply"].strip()
-                logger.info("fast_llm_answered reply=%s", reply[:60])
-                return reply
-
-            logger.info("fast_llm_not_confident")
+            content = body.get("message", {}).get("content", "").strip().lower()
+            if content in ("greeting", "thanks", "goodbye", "other"):
+                logger.debug("fast_llm_classify result=%s msg=%s", content, user_message[:30])
+                return content
+            logger.debug("fast_llm_classify_unexpected result=%s", content)
+            return "other"  # 分类异常时安全放行
+        except Exception as exc:
+            logger.warning("fast_llm_classify_failed: %s", exc)
             return None
 
+    def _reply(self, category: str, user_message: str) -> str | None:
+        """在指定分类范围内让小模型自由回复。"""
+        category_prompt = {
+            "greeting": "用户向你打招呼。用友好的语气回复，10 字以内。只输出回复内容。",
+            "thanks": "用户向你道谢。用礼貌的语气回复，10 字以内。只输出回复内容。",
+            "goodbye": "用户和你告别。用友好的语气回复，10 字以内。只输出回复内容。",
+        }
+
+        system = category_prompt.get(category, "")
+        if not system:
+            return None
+
+        payload = json.dumps({
+            "model": self.MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.3,
+                "num_predict": 32,
+            },
+        }).encode()
+
+        req = urllib.request.Request(
+            f"{self.OLLAMA_BASE}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=10)
+            body = json.loads(resp.read())
+            reply = body.get("message", {}).get("content", "").strip()
+            if reply:
+                logger.info("fast_llm_reply category=%s reply=%s", category, reply[:60])
+                return reply
+            return None
         except Exception as exc:
-            logger.warning("fast_llm_answer_failed: %s", exc)
+            logger.warning("fast_llm_reply_failed category=%s error=%s", category, exc)
             return None
 
     # ── Trace 分析（学习用） ──
