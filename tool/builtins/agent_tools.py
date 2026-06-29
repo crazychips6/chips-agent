@@ -1,13 +1,14 @@
-"""delegate_task 工具 — 多 Agent 任务委派
-
-Phase 1: Agent-as-Tool 模式。
-Phase 2: Agent Registry — agents.yaml 定义的角色 Agent。
+"""工厂函数（供 orchestrate 使用）— Agent 配置解析与子 Agent 构建
 
 子 Agent 共享主 Agent 的 gateway + registry，独立 context、独立消息历史。
 
-提供 expose 给 orchestrate_tool 使用的工厂函数：
+导出给 orchestrate_tool 使用：
   resolve_agent_config()
   build_sub_agent()
+  get_parent()
+
+delegate_task 工具已合并到 orchestrate（mode="single"），
+不再独立注册。
 """
 
 from __future__ import annotations
@@ -144,112 +145,5 @@ def build_sub_agent(
     return sub, final_task, max_iterations
 
 
-# ── Handler ──
-
-
-def _handle(args: dict[str, Any]) -> str:
-    parent = _parent
-    if parent is None:
-        return json.dumps({"error": "parent agent not initialized"})
-
-    task = args.get("task", "")
-    if not task:
-        return json.dumps({"error": "task 不能为空"})
-
-    try:
-        config = resolve_agent_config(args, parent)
-    except (RuntimeError, ValueError) as e:
-        return json.dumps({"error": str(e)})
-
-    config.setdefault("model", parent.model)
-    agent_name = config.get("agent_name", "(inline)")
-
-    try:
-        tag = config["agent_name"] or "(inline)"
-        logger.info("delegate_task[%s] task=%r model=%s tools=%s iter=%d",
-                     tag, task[:80], config["model"], config["tools"], config["max_iterations"])
-
-        record_id = parent.fork_sub_agent(
-            agent_name=agent_name,
-            task=task,
-            model=config.get("model"),
-            tools=config.get("tools"),
-            max_iterations=config.get("max_iterations", 10),
-            context=config.get("context", ""),
-        )
-        result = parent.get_sub_agent_result(record_id)
-        if result is None:
-            return json.dumps({"error": "子任务执行失败：无法获取结果", "record_id": record_id})
-
-        logger.info("delegate_task[%s] done id=%s iter=%d tokens=%d+%d",
-                     tag, record_id, result.get("iterations", 0),
-                     result.get("prompt_tokens", 0), result.get("completion_tokens", 0))
-
-        return json.dumps({
-            "result": result.get("output", ""),
-            "record_id": record_id,
-            "agent": agent_name,
-            "iterations": result.get("iterations", 0),
-            "tool_calls_count": len(result.get("tool_calls", [])),
-            "prompt_tokens": result.get("prompt_tokens", 0),
-            "completion_tokens": result.get("completion_tokens", 0),
-        }, ensure_ascii=False)
-    except Exception as e:
-        logger.error("delegate_task[%s] failed: %s", tag, e, exc_info=True)
-        return json.dumps({"error": f"子任务执行失败: {e}"})
-
-
-# ── Schema & 注册 ──
-
-DELEGATE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "delegate_task",
-        "description": (
-            "将子任务委派给一个独立的子 Agent 执行，返回执行结果。\n\n"
-            "两种使用方式：\n\n"
-            "1. 注册表 Agent（推荐）：\n"
-            '   delegate_task({"agent": "researcher", "task": "搜索xxx"})\n'
-            "2. 内联参数：\n"
-            '   delegate_task({"task": "...", "tools": ["web"], "model": "..."})\n'
-            "子 Agent 是独立的 ReAct 循环，有自己的消息历史。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "agent": {
-                    "type": "string",
-                    "description": "角色 Agent 名（可选值见 enum，不指定则走内联参数）",
-                },
-                "task": {
-                    "type": "string",
-                    "description": "给子 Agent 的任务描述",
-                },
-                "tools": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "子 Agent 可用的工具集名数组",
-                },
-                "model": {
-                    "type": "string",
-                    "description": "子 Agent 使用的模型名",
-                },
-                "max_iterations": {
-                    "type": "integer",
-                    "description": "子 Agent 的最大迭代次数，默认 10，最大 30",
-                },
-                "context": {
-                    "type": "string",
-                    "description": "额外上下文（可选）",
-                },
-            },
-        },
-    },
-}
-
-registry.register(
-    name="delegate_task",
-    toolset="core",
-    schema=DELEGATE_SCHEMA,
-    handler=_handle,
-)
+# delegate_task handler + schema 已移至 orchestrate（mode="single"）
+# 此文件仅保留工厂函数供 orchestrate 使用

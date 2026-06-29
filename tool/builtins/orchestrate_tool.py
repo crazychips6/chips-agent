@@ -35,12 +35,15 @@ def _handle(args: dict[str, Any]) -> str:
         return _run_single(args, parent)
     if mode == "supervisor":
         return _run_supervisor(args, parent)
+    if mode == "decompose":
+        return _run_decompose(args, parent)
     if mode == "pipeline":
         return _run_pipeline(args, parent)
     if mode == "debate":
         return _run_debate(args, parent)
 
-    return json.dumps({"error": f"未知编排模式: {mode}（支持: single, supervisor, pipeline, debate）"})
+    modes = "single, supervisor, decompose, pipeline, debate"
+    return json.dumps({"error": f"未知编排模式: {mode}（支持: {modes}）"})
 
 
 # ── Single（原 delegate_task）──
@@ -113,6 +116,25 @@ def _run_supervisor(args: dict, parent) -> str:
         "results": results,
     }
     return json.dumps(summary, ensure_ascii=False)
+
+
+# ── Decompose（自动分解） ──
+
+
+def _run_decompose(args: dict, parent) -> str:
+    """自动分解任务并执行，不指定具体步骤。"""
+    task = args.get("task", "")
+    if not task:
+        return json.dumps({"error": "task 不能为空"})
+
+    from agent.decomposer import decompose_and_execute
+    try:
+        agents = None  # 使用全部注册角色
+        result = decompose_and_execute(task=task, parent=parent, agents=agents)
+        return result
+    except Exception as e:
+        logger.error("decompose_failed: %s", e, exc_info=True)
+        return json.dumps({"error": f"任务分解执行失败: {e}"})
 
 
 # ── Pipeline ──
@@ -310,32 +332,32 @@ ORCHESTRATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "orchestrate",
-        "description": "多 Agent 编排（single/supervisor/pipeline/debate）",
+        "description": "子任务委派与多 Agent 编排。single=委派给单个 Agent, supervisor=分解给多个 Agent 并发/串行, pipeline=链式接力, decompose=自动分解, debate=多 Agent 对比回答",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["single", "supervisor", "pipeline", "debate"],
-                    "description": "single=单步委派, supervisor=多子任务, pipeline=链式, debate=对比",
+                    "enum": ["single", "supervisor", "pipeline", "decompose", "debate"],
+                    "description": "single=单步委派, supervisor=指定步骤, decompose=自动分解, pipeline=链式, debate=对比",
                 },
-                # ── single 独有 ──
+                # ── single / decompose 共用 ──
                 "agent": {
                     "type": "string",
-                    "description": "注册角色名（single 使用）",
+                    "description": "角色 Agent 名（single/decompose 使用，可选），不指定则用默认 Agent",
                 },
                 "task": {
                     "type": "string",
-                    "description": "任务描述（single/debate 使用）",
+                    "description": "任务描述（single/decompose/debate 使用）",
                 },
                 "tools": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "可用工具集（single 使用）",
+                    "description": "可用工具集名（single 使用，可选）",
                 },
                 "model": {
                     "type": "string",
-                    "description": "模型名（single 使用）",
+                    "description": "模型名（single 使用，可选）",
                 },
                 "max_iterations": {
                     "type": "integer",
@@ -343,7 +365,7 @@ ORCHESTRATE_SCHEMA = {
                 },
                 "context": {
                     "type": "string",
-                    "description": "附加上下文（single 使用）",
+                    "description": "附加上下文（single 使用，可选）",
                 },
                 # ── supervisor/pipeline 独有 ──
                 "steps": {
@@ -375,7 +397,7 @@ ORCHESTRATE_SCHEMA = {
                     "description": "并发执行（supervisor，默认 false）",
                 },
             },
-            "required": ["mode"],
+            "required": ["mode", "task"],
         },
     },
 }

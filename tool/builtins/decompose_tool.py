@@ -63,9 +63,4 @@ DECOMPOSE_SCHEMA = {
     },
 }
 
-registry.register(
-    name="decompose",
-    toolset="sub_agent",
-    schema=DECOMPOSE_SCHEMA,
-    handler=_handle,
-)
+# decompose 已合并到 orchestrate（mode="supervisor" 或 "decompose"），不再独立注册

@@ -13,13 +13,13 @@ from config.agent_config import AgentRegistry
 
 
 def _sync_agent_schemas(agent_registry: AgentRegistry) -> None:
-    """将 agent_registry 中的角色名同步到 delegate_task/orchestrate 的 schema enum。"""
+    """将 agent_registry 中的角色名同步到 orchestrate 的 schema enum。
+
+    delegate_task 和 decompose 已合并到 orchestrate 中。
+    """
     from tool.registry import registry as _tool_registry
 
     _agent_names = agent_registry.names
-    _de = _tool_registry._entries.get("delegate_task")
-    if _de and _agent_names:
-        _de.schema["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
     _orch = _tool_registry._entries.get("orchestrate")
     if _orch and _agent_names:
         _os = _orch.schema

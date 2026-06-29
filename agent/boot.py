@@ -271,17 +271,21 @@ def _build_memory_manager(holographic: bool = False) -> MemoryManager:
 
 
 def _inject_agent_schemas(agent_registry: AgentRegistry) -> None:
-    """将 agent 角色名注入 delegate_task/orchestrate 的 schema enum。"""
+    """将 agent 角色名注入 orchestrate 的 schema enum。
+
+    delegate_task/decompose 已合并到 orchestrate 中，不再单独注册。
+    """
     _agent_names = agent_registry.names
-    _de = registry._entries.get("delegate_task")
-    if _de and _agent_names:
-        _de.schema["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
     _orch = registry._entries.get("orchestrate")
     if _orch and _agent_names:
         _os = _orch.schema
+        # agent 参数（single/decompose 模式用）
+        _os["function"]["parameters"]["properties"]["agent"]["enum"] = _agent_names
+        # steps[].agent（supervisor/pipeline 模式用）
         _os["function"]["parameters"]["properties"]["steps"]["items"]["properties"]["agent"]["enum"] = _agent_names
+        # agents[]（debate 模式用）
         _os["function"]["parameters"]["properties"]["agents"]["items"]["enum"] = _agent_names
-    get_logger().info("agent_registry loaded names=%s injected into delegate_task/orchestrate schema", _agent_names)
+    get_logger().info("agent_registry loaded names=%s injected into orchestrate schema", _agent_names)
 
 
 def _restore_or_create_session(agent: AIAgent, args: object) -> None:
