@@ -64,7 +64,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "screenshot",
-            "description": "拍摄屏幕截图",
+            "description": "屏幕截图",
             "parameters": {
                 "type": "object",
                 "properties": {},

@@ -307,14 +307,14 @@ WEB_SCHEMA = {
     "type": "function",
     "function": {
         "name": "web",
-        "description": "获取网页或搜索互联网",
+        "description": "搜索或读取网页",
         "parameters": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["fetch", "search"], "description": "fetch=获取网页, search=搜索"},
-                "url": {"type": "string", "description": "要获取的 URL（fetch 使用）"},
-                "query": {"type": "string", "description": "搜索关键词（search 使用）"},
-                "max_results": {"type": "integer", "description": "最大结果数（search，默认 10，最大 20）"},
+                "action": {"type": "string", "enum": ["fetch", "search"], "description": "fetch=获取, search=搜索"},
+                "url": {"type": "string", "description": "目标 URL"},
+                "query": {"type": "string", "description": "搜索词"},
+                "max_results": {"type": "integer", "description": "最大结果数（默认 10）"},
             },
             "required": ["action"],
         },

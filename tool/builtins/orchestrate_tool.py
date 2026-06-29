@@ -332,42 +332,40 @@ ORCHESTRATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "orchestrate",
-        "description": "子任务委派与多 Agent 编排。single=委派给单个 Agent, supervisor=分解给多个 Agent 并发/串行, pipeline=链式接力, decompose=自动分解, debate=多 Agent 对比回答",
+        "description": "委派任务给一个或多个 Agent 执行",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
                     "enum": ["single", "supervisor", "pipeline", "decompose", "debate"],
-                    "description": "single=单步委派, supervisor=指定步骤, decompose=自动分解, pipeline=链式, debate=对比",
+                    "description": "single=单步, supervisor=多步, decompose=自动分解, pipeline=链式, debate=对比",
                 },
-                # ── single / decompose 共用 ──
                 "agent": {
                     "type": "string",
-                    "description": "角色 Agent 名（single/decompose 使用，可选），不指定则用默认 Agent",
+                    "description": "Agent 角色名（可选），不指定用默认",
                 },
                 "task": {
                     "type": "string",
-                    "description": "任务描述（single/decompose/debate 使用）",
+                    "description": "任务描述",
                 },
                 "tools": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "可用工具集名（single 使用，可选）",
+                    "description": "工具集名（可选）",
                 },
                 "model": {
                     "type": "string",
-                    "description": "模型名（single 使用，可选）",
+                    "description": "模型名（可选）",
                 },
                 "max_iterations": {
                     "type": "integer",
-                    "description": "最大迭代次数（single 使用，默认 10，最大 30）",
+                    "description": "最大迭代次数，默认 10",
                 },
                 "context": {
                     "type": "string",
-                    "description": "附加上下文（single 使用，可选）",
+                    "description": "附加上下文（可选）",
                 },
-                # ── supervisor/pipeline 独有 ──
                 "steps": {
                     "type": "array",
                     "items": {
@@ -375,26 +373,24 @@ ORCHESTRATE_SCHEMA = {
                         "properties": {
                             "agent": {"type": "string", "description": "Agent 角色名"},
                             "task": {"type": "string", "description": "子任务描述"},
-                            "model": {"type": "string", "description": "可选，覆盖模型"},
+                            "model": {"type": "string", "description": "可选覆盖模型"},
                         },
                         "required": ["agent", "task"],
                     },
-                    "description": "子任务步骤（supervisor/pipeline 使用）",
+                    "description": "步骤列表",
                 },
-                # ── debate 独有 ──
                 "agents": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Agent 列表（debate 使用）",
+                    "description": "参与 Agent 列表（debate）",
                 },
-                # ── supervisor 独有 ──
                 "goal": {
                     "type": "string",
-                    "description": "总目标（supervisor 可选）",
+                    "description": "总目标（可选）",
                 },
                 "parallel": {
                     "type": "boolean",
-                    "description": "并发执行（supervisor，默认 false）",
+                    "description": "并发执行，默认 false",
                 },
             },
             "required": ["mode", "task"],

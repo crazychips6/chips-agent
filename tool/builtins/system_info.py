@@ -390,7 +390,7 @@ SYSTEM_INFO_SCHEMA = {
     "type": "function",
     "function": {
         "name": "system_info",
-        "description": "获取系统信息（OS/CPU/内存/磁盘/Python）",
+        "description": "获取系统信息",
         "parameters": {
             "type": "object",
             "properties": {},

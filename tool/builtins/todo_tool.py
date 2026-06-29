@@ -138,7 +138,7 @@ TODO_SCHEMA = {
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "要写入的条目。省略则读取。",
+                    "description": "要写入的条目",
                     "items": {
                         "type": "object",
                         "properties": {

@@ -192,7 +192,7 @@ CALENDAR_SCHEMA = {
     "type": "function",
     "function": {
         "name": "calendar",
-        "description": "日期时间查询（当前/月历/日期差/星期）",
+        "description": "日期时间查询",
         "parameters": {
             "type": "object",
             "properties": {

@@ -68,7 +68,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "sub_agent",
-            "description": "子 Agent 执行记录查询（list=列出记录, get=查看详情）",
+            "description": "子 Agent 执行记录查询",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -79,11 +79,11 @@ registry.register(
                     },
                     "agent_name": {
                         "type": "string",
-                        "description": "按角色名筛选（list 使用，可选）",
+                        "description": "按角色名筛选（可选）",
                     },
                     "record_id": {
                         "type": "string",
-                        "description": "子 Agent 记录 ID（get 使用，在 orchestrate 返回结果中可见）",
+                        "description": "子 Agent 记录 ID（orchestrate 返回结果中可见）",
                     },
                 },
                 "required": ["action"],

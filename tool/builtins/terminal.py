@@ -57,7 +57,7 @@ registry.register(
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "执行 shell 命令",
+            "description": "执行命令",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -352,7 +352,7 @@ PROCESS_SCHEMA = {
     "type": "function",
     "function": {
         "name": "process",
-        "description": "管理进程（列表/详情/终止）",
+        "description": "管理进程",
         "parameters": {
             "type": "object",
             "properties": {
