@@ -42,9 +42,9 @@ def _build_parser():
                         help="Docker 环境使用的镜像名（仅在 --env=docker 时生效）")
     parser.add_argument("--no-compress", action="store_true", help="禁用上下文压缩")
     parser.add_argument("--auto-plan", action="store_true", default=False,
-                        help="启用自动路由规划（RuleEngine）")
+                        help="（已弃用）安全拦截始终启用，此参数不再生效")
     parser.add_argument("--no-auto-plan", action="store_true", default=False,
-                        help="禁用自动路由规划")
+                        help="（已弃用）安全拦截始终启用，此参数不再生效")
 
     # 子命令
     subparsers = parser.add_subparsers(dest="command")
@@ -177,24 +177,17 @@ def _handle_insight(args) -> None:
 
 
 def _handle_router(args) -> None:
-    """chips router 子命令：管理路由规则。"""
-    from rules.engine import RuleEngine
-    engine = RuleEngine(include_defaults=True)
+    """chips router 子命令：管理安全拦截规则。"""
+    from safety.guard import GuardEngine
+    engine = GuardEngine(include_defaults=True)
     if args.router_action == "list":
-        print(f"路由规则 (共 {len(engine.rules)} 条):")
+        print(f"安全规则 (共 {len(engine.rules)} 条):")
         for r in engine.rules:
             print(f"  [{r.priority:4d}] {r.name:30s} -> {r.then:20s} # {r.reason}")
-    elif args.router_action == "test":
-        results = engine.test_rules()
-        passed = sum(1 for r in results if r["passed"])
-        for r in results:
-            status = "✅" if r["passed"] else "❌"
-            print(f"  {status} {r['rule']}: expected={r['expected']} got={r['got']} input={r['input'][:50]}")
-        print(f"\n{passed}/{len(results)} 通过")
     elif args.router_action == "summary":
         print(engine.summary())
     elif args.router_action == "init":
-        from rules.loader import write_default_config
+        from safety.loader import write_default_config
         print(write_default_config())
     elif args.router_action == "reload":
         engine.reload()

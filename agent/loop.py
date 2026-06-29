@@ -74,8 +74,6 @@ class AIAgent:
         self.permanent_toolsets: list[str] = []
         # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
         self._extra_tool_names: set[str] = set()
-        # 端侧小模型预选的工具（LocalRouter 注入，每轮重置）
-        self._intent_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
         # 插件管理器，由 cli.py 在启动时初始化注入
         self.plugin_manager: PluginManager | None = None
@@ -106,10 +104,9 @@ class AIAgent:
         # ── 子 Agent 管理 ──
         self._sub_agent_manager = SubAgentManager()
 
-        # ── 自动路由规划（由 cli.py 在启动时注入 RuleEngine） ──
-        self.auto_plan: bool = False
-        self._rule_engine: Any = None  # rules.engine.RuleEngine
-        self._local_router: Any = None  # rules.local_router.LocalRouter
+        # ── 安全引擎 + 端侧快道（由 boot.py 注入 GuardEngine + FastLLM） ──
+        self._guard_engine: Any = None  # safety.guard.GuardEngine
+        self._fast_llm: Any = None  # endpoint.fast_llm.FastLLM
 
     def interrupt(self):
         """请求中断当前对话。线程安全（可在信号处理器中调用）。"""
@@ -227,16 +224,10 @@ class AIAgent:
             return
         from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
-        if self._local_router is not None and self._local_router.is_available():
-            # ── 端侧模型路由模式：基础兜底 + 小模型注入 + 插件/MCP ──
-            base = {"bash", "file", "clarify", "intent_query"} & self.registry.tool_names
-            self.tool_names = base | self._intent_tool_names | self._extra_tool_names
-        else:
-            # ── 原始模式：CORE + active + permanent + extra ──
-            core_tools = CORE_ALWAYS_ON & self.registry.tool_names
-            active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
-            perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
-            self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
+        core_tools = CORE_ALWAYS_ON & self.registry.tool_names
+        active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
+        perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
+        self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
 
         self.tool_names &= self.registry.tool_names
 
@@ -313,121 +304,32 @@ class AIAgent:
         from dataclasses import asdict
         return asdict(record)
 
-    # ── 自动路由执行（由 RuleEngine 触发） ──
-
-    def _execute_auto_plan(self, user_message: str, decision) -> str | None:
-        """执行自动路由决策，返回执行结果或 None（走正常 ReAct 循环）。"""
-        action = decision.action
-
-        if action == "delegate":
-            return self._auto_delegate(user_message, decision.target)
-
-        if action == "orchestrate":
-            return self._auto_orchestrate(user_message, decision)
-
-        if action in ("handoff",):
-            logger.info("auto_plan_unsupported action=%s", action)
-            return None
-
-        return None
-
-    def _auto_delegate(self, user_message: str, agent_name: str) -> str | None:
-        """自动委派子 Agent。"""
-        try:
-            from tool.builtins.agent_tools import build_sub_agent, resolve_agent_config
-        except ImportError:
-            logger.warning("auto_delegate_unavailable: agent_tools 未加载")
-            return None
-
-        try:
-            args = {"agent": agent_name, "task": user_message}
-            config = resolve_agent_config(args, self)
-        except (RuntimeError, ValueError) as e:
-            logger.info("auto_delegate_config_failed name=%s error=%s", agent_name, e)
-            return None
-
-        try:
-            sub, final_task, max_iterations = build_sub_agent(
-                task=user_message,
-                parent=self,
-                **config,
-                session_db=self.session_db,
-                session_id=self.session_id or "",
-            )
-            logger.info("auto_delegate_start agent=%s task=%r", agent_name, final_task[:100])
-            result = sub.run_conversation(final_task, max_iterations=max_iterations)
-            logger.info("auto_delegate_done agent=%s result_len=%d", agent_name, len(result))
-            return result
-        except Exception:
-            logger.exception("auto_delegate_failed agent=%s", agent_name)
-            return None
-
-
-
-    def _auto_orchestrate(self, user_message: str, decision) -> str | None:
-        """执行编排路由决策。"""
-        plan = getattr(decision, "plan", None)
-        if not plan:
-            logger.info("auto_orchestrate_no_plan")
-            return None
-
-        mode = plan.get("mode", "supervisor")
-        steps = plan.get("steps", [])
-        if not steps:
-            logger.info("auto_orchestrate_no_steps")
-            return None
-
-        logger.info("auto_orchestrate_start mode=%s steps=%d", mode, len(steps))
-
-        try:
-            from tool.builtins.orchestrate_tool import _handle as orchestrate_handle
-            result = orchestrate_handle({
-                "mode": mode,
-                "steps": steps,
-                "parallel": plan.get("parallel", True),
-                "goal": user_message,
-            })
-            return result
-        except Exception:
-            logger.exception("auto_orchestrate_failed")
-            return None
-
-    # ── 路由决策 ──
+    # ── 安全拦截 + 端侧快速通道 ──
 
     def _pre_route(self, user_message: str) -> str | None:
-        """路由前置判断：RuleEngine + 端侧小模型，拦截可直接回复的消息。
+        """安全拦截 + 端侧快速通道。
 
         Returns:
             str  — 直接回复内容（不走主 LLM）
             None — 继续走 ReAct 循环
         """
-        # RuleEngine 自动路由（安全拦截 / 委派子 Agent / 编排）
-        if self.auto_plan and self._rule_engine is not None:
-            decision = self._rule_engine.evaluate(user_message)
+        # ── Layer 1: GuardEngine 安全拦截 ──
+        if self._guard_engine is not None:
+            decision = self._guard_engine.evaluate(user_message)
             if decision.is_block():
-                logger.info("auto_plan_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
+                logger.info("guard_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
                 return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
-            if decision.is_route():
-                result = self._execute_auto_plan(user_message, decision)
-                if result is not None:
-                    return result
-            # direct → 继续
 
-        # 端侧小模型路由（问候直答 / 工具注入）
-        if self._local_router is not None and self._local_router.is_available():
-            intent = self._local_router.detect(user_message)
-            if self._local_router.is_simple_greeting(intent):
-                reply = intent.get("direct_reply", "你好！")
+        # ── Layer 2: FastLLM 端侧快速通道 ──
+        if self._fast_llm is not None and self._fast_llm.is_available():
+            reply = self._fast_llm.answer(user_message)
+            if reply is not None:
                 reply += " \033[38;2;100;100;120m[端侧]\033[0m"
                 self.messages.append({"role": "user", "content": user_message})
                 self.messages.append({"role": "assistant", "content": reply})
-                logger.info("local_router: simple_greeting reply=%s", reply[:60])
+                logger.info("fast_llm_reply reply=%s", reply[:60])
                 return reply
-            if self._local_router.is_new_task(intent):
-                intent_tools = intent.get("tools", [])
-                if intent_tools:
-                    self._intent_tool_names = set(intent_tools)
-                    logger.info("local_router: new_task tools=%s", intent_tools)
+
         return None
 
     # ── 对话准备 ──
@@ -445,12 +347,7 @@ class AIAgent:
         knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
 
         from tool.toolsets import build_availability_table
-        # 小模型路由模式下：可用工具表只显示实际注入的兜底工具，不展示 toolset 体系
-        if self._local_router is not None and self._local_router.is_available():
-            base = {"bash", "file", "clarify", "intent_query"}
-            avail = "始终可用：" + ", ".join(sorted(base))
-        else:
-            avail = build_availability_table()
+        avail = build_availability_table()
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
             timestamp=str(datetime.date.today()),
@@ -510,14 +407,14 @@ class AIAgent:
         trace = self._collect_trace(user_message, final_reply)
         if trace is None:
             return
-        if self._local_router is None or not self._local_router.is_available():
+        if self._fast_llm is None or not self._fast_llm.is_available():
             return
 
         from knowledge.manager import KnowledgeManager
         if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
             self._knowledge_manager = KnowledgeManager()
 
-        analysis = self._local_router.analyze_trace(trace)
+        analysis = self._fast_llm.analyze_trace(trace)
         if not analysis.get("optimal"):
             return
 
@@ -540,9 +437,8 @@ class AIAgent:
         from agent.logger import set_turn_number
         set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
-        self._intent_tool_names = set()  # 重置上一轮的工具注入
 
-        # 阶段一：路由决策（RuleEngine + 端侧小模型）
+        # 阶段一：安全拦截 + 端侧快道（GuardEngine + FastLLM）
         reply = self._pre_route(user_message)
         if reply is not None:
             return reply

@@ -1,23 +1,13 @@
-"""Agent 路由规则引擎
+"""rules — 兼容层（已迁移到 safety/ 和 endpoint/）
 
-三层递进判断：规则引擎 → LLM Router → Fallback。
-
-用法::
-
-    from rules.engine import RuleEngine
-    engine = RuleEngine()
-    decision = engine.evaluate("帮我搜索一下最新的 AI 框架")
-    # RouteDecision(action='delegate', target='researcher', ...)
-
-    from rules.llm_router import LLMRouter
-    router = LLMRouter(gateway=gw, agent_registry=reg)
-    decision = router.route("复杂任务")
-    # RouteDecision(action='delegate', target='researcher', ...)
+新代码应直接导入：
+  from safety.guard import GuardEngine
+  from safety.models import Rule, RouteDecision
+  from endpoint.fast_llm import FastLLM
 """
 
-from rules.engine import RuleEngine
-from rules.models import Rule, RouteDecision, ActionType
-from rules.facts import FactRegistry
-from rules.llm_router import LLMRouter
+from safety.guard import GuardEngine
+from safety.models import Rule, RouteDecision
+from endpoint.fast_llm import FastLLM
 
-__all__ = ["RuleEngine", "LLMRouter", "Rule", "RouteDecision", "ActionType", "FactRegistry"]
+__all__ = ["GuardEngine", "Rule", "RouteDecision", "FastLLM"]

@@ -139,7 +139,8 @@ def run(args: object) -> None:
 
     # ── 3. 工具系统接线 ──
     agent_registry = _wire_tools(agent)
-    _wire_auto_plan(agent, args, agent_registry)
+    _wire_guard_engine(agent)
+    _wire_fast_llm(agent)
 
     # ── 4. 执行环境 ──
     os.environ["CHIPS_ENV"] = args.env
@@ -293,21 +294,24 @@ def _restore_or_create_session(agent: AIAgent, args: object) -> None:
         agent.session_id = session_db.create_session()
 
 
-def _wire_auto_plan(agent, args, agent_registry):
-    """将 RuleEngine 注入 Agent（如果启用了自动路由规划）。
+def _wire_guard_engine(agent):
+    """将 GuardEngine 注入 Agent — 安全拦截层。
 
-    LLMRouter 已移除——单步委派由主 LLM 在 ReAct 循环内
-    自行决定调 delegate_task 还是 decompose。
+    始终启用（不依赖命令行参数），只做 block / direct 判断。
+    委托/编排已移除——由主 LLM 在 ReAct 循环内自行决定调 delegate_task 或 decompose。
     """
-    use_auto_plan = args.auto_plan and not args.no_auto_plan
-    if not use_auto_plan:
-        return
+    from safety.guard import GuardEngine
+    guard = GuardEngine(include_defaults=True)
+    agent._guard_engine = guard
+    get_logger().info("guard_engine_loaded rules=%d", len(guard.rules))
 
-    from rules.engine import RuleEngine
-    rule_engine = RuleEngine(
-        include_defaults=True,
-        tool_names=agent.tool_names,
-    )
-    agent.auto_plan = True
-    agent._rule_engine = rule_engine
-    get_logger().info("rule_engine_loaded rules=%d", len(rule_engine.rules))
+
+def _wire_fast_llm(agent):
+    """将 FastLLM 注入 Agent — 端侧小模型快速通道。
+
+    启动时检测 Ollama 可用性，不可用时静默降级。
+    只做"小模型能不能答"的判断，不做路由分发。
+    """
+    from endpoint.fast_llm import FastLLM
+    agent._fast_llm = FastLLM()
+    get_logger().info("fast_llm_initialized")

@@ -17,9 +17,9 @@ from typing import Any, Union
 
 import yaml
 
-from rules.models import GroupCondition, LeafCondition, Rule, parse_action
+from safety.models import GroupCondition, LeafCondition, Rule, parse_action
 
-logger = logging.getLogger("chips.rules.loader")
+logger = logging.getLogger("chips.safety.loader")
 
 _DEFAULT_RULES_PATH = Path(__file__).parent / "defaults.yaml"
 _USER_RULES_PATH = Path.home() / ".chips" / "routing.yaml"
@@ -195,10 +195,10 @@ def write_default_config(path: Path | None = None) -> str:
 
 
 # 兜底默认规则文本（当 default.yaml 不存在时使用）
-DEFAULT_RULES_TEXT = """# chips Agent 路由规则
+DEFAULT_RULES_TEXT = """# chips Agent 安全拦截规则
 #
 # 规则按 priority 降序匹配，第一条命中的规则生效。
-# 如果所有规则均未命中，走默认行为（direct — 由主 Agent 直接处理）。
+# 所有规则均未命中时走默认行为：direct（进入 ReAct 循环）。
 
 rules:
   # ── 安全类规则（高优先级） ──
@@ -210,30 +210,10 @@ rules:
     then: block
     reason: "用户请求紧急停止"
 
-  # ── 效率类规则（中优先级） ──
-
-  - name: "short_reply_skip"
-    priority: 100
+  - name: "block_dangerous_commands"
+    priority: 4000
     when:
-      is_short_reply: { eq: true }
-    then: direct
-    reason: "短回复，直接处理，无需路由"
-
-  # ── 能力类规则（中优先级） ──
-
-  - name: "research_trigger"
-    priority: 80
-    when:
-      intent_keyword: { in: ["research"] }
-    then: delegate(researcher)
-    reason: "检测到搜索/调研意图，委派给 Researcher Agent"
-
-  # ── 兜底规则（低优先级） ──
-
-  - name: "long_message_llm_router"
-    priority: 10
-    when:
-      message_length: { gte: 200 }
-    then: llm_router
-    reason: "长消息，用 LLM Router 做深度分析"
+      intent_keyword: { in: ["rm -rf /", "dd if=/dev/zero", "mkfs", "fdisk"] }
+    then: block
+    reason: "检测到危险命令，已拦截"
 """

@@ -1,2 +1,12 @@
-# safety — 安全层：危险命令审批 + 凭证剥离 + 日志脱敏 + 审计日志 + 审批白名单
-# 零内部依赖，供 environment/ 模块使用。
+"""safety — 安全拦截引擎
+
+包含：
+  - GuardEngine:    安全拦截判断（block / direct）
+  - Rule:           规则定义
+  - RouteDecision:  判断结果
+"""
+
+from safety.guard import GuardEngine
+from safety.models import Rule, RouteDecision
+
+__all__ = ["GuardEngine", "Rule", "RouteDecision"]

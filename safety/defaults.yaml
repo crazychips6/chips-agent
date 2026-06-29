@@ -1,0 +1,24 @@
+# chips Agent 安全拦截规则（默认配置）
+#
+# 规则按 priority 降序匹配，第一条命中的规则生效。
+# 所有规则均未命中时走默认行为：direct（进入 ReAct 循环）。
+#
+# 自定义规则请写入 ~/.chips/routing.yaml，同名规则会覆盖默认规则。
+
+rules:
+
+  # ── 安全类规则（最高优先级） ──
+
+  - name: "block_emergency_stop"
+    priority: 5000
+    when:
+      intent_keyword: { in: ["紧急停止", "emergency_stop", "立即停止"] }
+    then: block
+    reason: "用户请求紧急停止，拦截当前操作"
+
+  - name: "block_dangerous_commands"
+    priority: 4000
+    when:
+      intent_keyword: { in: ["rm -rf /", "dd if=/dev/zero", "mkfs", "fdisk"] }
+    then: block
+    reason: "检测到危险命令，已拦截"
