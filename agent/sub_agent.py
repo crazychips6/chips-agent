@@ -6,34 +6,74 @@
 Usage::
     manager = SubAgentManager(max_history_per_role=5)
     record_id = manager.create("researcher", "搜索 API 文档")
-    manager.update(record_id, status="running")
+    manager.update(record_id, status=AgentStatus.RUNNING)
     # ... 子 Agent 执行 ...
-    manager.update(record_id, status="completed", output="...")
+    manager.update(record_id, status=AgentStatus.COMPLETED, output="...")
     result = manager.get(record_id)
     all_results = manager.list_all()
 """
 
 from __future__ import annotations
 
+import enum
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
 
+class AgentStatus(enum.Enum):
+    """子 Agent 生命周期的合法状态。
+
+    合法转换:
+        CREATED → RUNNING → COMPLETED
+                          → FAILED
+                          → CANCELLED
+        COMPLETED / FAILED / CANCELLED  → (终态)
+    """
+
+    CREATED = "created"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    def can_transition_to(self, target: AgentStatus) -> bool:
+        """判断从当前状态能否转换到目标状态。"""
+        return target in _STATUS_TRANSITIONS.get(self, set())
+
+    @staticmethod
+    def validate_transition(current: AgentStatus, target: AgentStatus) -> None:
+        """校验状态转换，非法时抛 ValueError。"""
+        if current.can_transition_to(target):
+            return
+        msg = f"非法状态转换: {current.value} → {target.value}"
+        raise ValueError(msg)
+
+
+# 合法转换表（定义在类外部，避免 enum 元类干扰）
+_STATUS_TRANSITIONS: dict[AgentStatus, set[AgentStatus]] = {
+    AgentStatus.CREATED: {AgentStatus.RUNNING},
+    AgentStatus.RUNNING: {AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED},
+    AgentStatus.COMPLETED: set(),
+    AgentStatus.FAILED: set(),
+    AgentStatus.CANCELLED: set(),
+}
+
+
 @dataclass
 class SubAgentRecord:
     """单个子 Agent 的执行记录。
 
-    从 created 到 completed/failed/cancelled，完整生命周期。
+    从 CREATED 到 COMPLETED/FAILED/CANCELLED，完整生命周期。
     messages 和 tool_calls 只在 get() 时返回，list() 跳过以节省 token。
     """
 
     id: str
     agent_name: str                      # 角色名（如 "researcher"）或 "(inline)"
     task: str                            # 子任务描述
-    status: str                          # created | running | completed | failed | cancelled
     started_at: float
+    status: AgentStatus = AgentStatus.CREATED
     completed_at: float | None = None
     iterations: int = 0
     messages: list[dict] | None = None   # 子 Agent 的完整消息列表（仅 get 时可见）
@@ -119,13 +159,13 @@ class SubAgentManager:
     # ── 生命周期 ──
 
     def create(self, agent_name: str, task: str) -> str:
-        """创建子 Agent 记录，返回 record id。状态为 created。"""
+        """创建子 Agent 记录，返回 record id。状态为 CREATED。"""
         record_id = uuid.uuid4().hex[:12]
         record = SubAgentRecord(
             id=record_id,
             agent_name=agent_name,
             task=task,
-            status="created",
+            status=AgentStatus.CREATED,
             started_at=time.time(),
         )
         self._by_id[record_id] = record
@@ -145,12 +185,24 @@ class SubAgentManager:
     def update(self, id: str, **fields: Any) -> None:
         """更新记录字段。支持 status / output / error 等。
 
+        当 status 变化时自动校验状态转换合法性。
+        字段值为 AgentStatus 枚举或字符串均可。
+
         Raises:
-            ValueError: id 不存在
+            ValueError: id 不存在 或 非法状态转换
         """
         record = self._by_id.get(id)
         if record is None:
             raise ValueError(f"Unknown sub-agent id: {id}")
+
+        # 状态转换校验
+        if "status" in fields:
+            new_status = fields["status"]
+            if isinstance(new_status, str):
+                new_status = AgentStatus(new_status)
+            AgentStatus.validate_transition(record.status, new_status)
+            fields["status"] = new_status
+
         for k, v in fields.items():
             if hasattr(record, k):
                 setattr(record, k, v)
@@ -177,7 +229,7 @@ class SubAgentManager:
 
         self.update(
             id,
-            status="failed" if error else "completed",
+            status=AgentStatus.FAILED if error else AgentStatus.COMPLETED,
             completed_at=time.time(),
             iterations=iterations,
             messages=messages,
