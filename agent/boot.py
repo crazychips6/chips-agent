@@ -27,6 +27,7 @@ from memory.providers.builtin import BuiltinMemoryProvider
 from plugins import PluginManager
 from plugins.mcp import MCPManager
 from session.db import SessionDB
+import tool.builtins  # noqa: F401 — 导入即注册所有工具
 from tool.registry import registry
 from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
