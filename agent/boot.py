@@ -175,6 +175,9 @@ def run(args: object) -> None:
     if restored:
         get_logger().info("sub_agent_history_restored count=%d", restored)
 
+    # 启动子 Agent 超时清理线程
+    agent._sub_agent_manager.start_cleaner()
+
     # ── 7. 日志 + TUI + 技能系统 ──
     setup_logging(session_id=agent.session_id)
     get_logger().info("session started")

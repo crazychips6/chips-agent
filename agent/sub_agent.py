@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -158,7 +159,7 @@ class SubAgentManager:
       manager.restore(session_id)  # 启动时恢复历史
     """
 
-    def __init__(self, max_history_per_role: int = 5):
+    def __init__(self, max_history_per_role: int = 5, cleanup_interval: int = 30):
         self._max = max_history_per_role
         self._agents: dict[str, list[SubAgentRecord]] = {}
         self._by_id: dict[str, SubAgentRecord] = {}
@@ -172,6 +173,13 @@ class SubAgentManager:
             "failed": [],
             "cancelled": [],
         }
+        # 超时控制
+        self._ttl: dict[str, float] = {}  # record_id → 截止时间戳
+        self._cleaner_thread: threading.Thread | None = None
+        self._cleanup_interval = cleanup_interval
+        self._cleaner_stop = threading.Event()
+        # 锁（线程安全）
+        self._lock = threading.Lock()
 
     def on(self, event: str, fn: Callable) -> None:
         """注册生命周期钩子。event: created/running/completed/failed/cancelled。"""
@@ -191,6 +199,70 @@ class SubAgentManager:
             except Exception as exc:
                 logger.error("sub_agent_hook_error event=%s fn=%s error=%s",
                              event, getattr(fn, "__name__", "?"), exc)
+
+    # ── 超时控制 ──
+
+    def create_with_ttl(self, agent_name: str, task: str, ttl: int = 300) -> str:
+        """创建子 Agent 并设定超时秒数。超时后自动 CANCELLED。"""
+        record_id = self.create(agent_name, task)
+        deadline = time.time() + ttl
+        with self._lock:
+            self._ttl[record_id] = deadline
+        return record_id
+
+    def _cleaner_loop(self):
+        """后台线程：定期扫描超时的 running 记录 → 自动取消。"""
+        while not self._cleaner_stop.is_set():
+            self._cleaner_stop.wait(self._cleanup_interval)
+            self._check_timeouts()
+
+    def _check_timeouts(self):
+        """检查所有 running 的子 Agent，超时的自动取消。"""
+        now = time.time()
+        to_cancel: list[str] = []
+        with self._lock:
+            for rid, deadline in list(self._ttl.items()):
+                if now >= deadline:
+                    to_cancel.append(rid)
+                    del self._ttl[rid]
+
+        for rid in to_cancel:
+            try:
+                record = self._by_id.get(rid)
+                if record is not None and record.status == AgentStatus.RUNNING:
+                    self.update(rid, status=AgentStatus.CANCELLED)
+                    logger.info("sub_agent_timeout_cancelled id=%s agent=%s ttl_exceeded",
+                                rid, record.agent_name)
+            except Exception as exc:
+                logger.warning("sub_agent_timeout_error id=%s error=%s", rid, exc)
+
+    def _remove_ttl(self, record_id: str) -> None:
+        """移除超时记录（子 Agent 正常结束时调用）。"""
+        with self._lock:
+            self._ttl.pop(record_id, None)
+
+    def start_cleaner(self) -> None:
+        """启动后台超时清理线程。"""
+        if self._cleaner_thread is not None and self._cleaner_thread.is_alive():
+            return
+        self._cleaner_stop.clear()
+        self._cleaner_thread = threading.Thread(
+            target=self._cleaner_loop,
+            name="sub-agent-cleaner",
+            daemon=True,
+        )
+        self._cleaner_thread.start()
+        logger.info("sub_agent_cleaner_started interval=%d", self._cleanup_interval)
+
+    def stop_cleaner(self, timeout: float = 5.0) -> None:
+        """停止后台清理线程。"""
+        self._cleaner_stop.set()
+        if self._cleaner_thread is not None:
+            self._cleaner_thread.join(timeout=timeout)
+            self._cleaner_thread = None
+            logger.info("sub_agent_cleaner_stopped")
+
+    # ── Session 绑定 ──
 
     def set_session(self, session_db: Any, session_id: str) -> None:
         """绑定会话上下文，后续 create/update 自动持久化。"""
@@ -320,6 +392,9 @@ class SubAgentManager:
         if old_status is not None:
             self._log_event(id, old_status, record.status.value)
             self._emit(record.status.value, record)
+            # 到达终态 → 移除 TTL
+            if record.status in (AgentStatus.COMPLETED, AgentStatus.FAILED, AgentStatus.CANCELLED):
+                self._remove_ttl(id)
 
     # ── 结果捕获（子 Agent 执行完毕后调用） ──
 

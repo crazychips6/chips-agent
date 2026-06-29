@@ -260,7 +260,7 @@ class AIAgent:
         Returns:
             子 Agent 记录的 id（用于后续 get_sub_agent_result 查询）
         """
-        record_id = self._sub_agent_manager.create(agent_name, task)
+        record_id = self._sub_agent_manager.create_with_ttl(agent_name, task, ttl=300)
         self._sub_agent_manager.update(record_id, status="running")  # str → AgentStatus 自动转换
 
         try:
@@ -698,9 +698,10 @@ class AIAgent:
                 self.plugin_manager.dispatch_session_end(self.messages)
 
     def shutdown(self):
-        """释放资源：关闭 MCP 连接和所有记忆提供者。"""
+        """释放资源：关闭 MCP 连接、清理线程和所有记忆提供者。"""
         if hasattr(self, "mcp_manager") and self.mcp_manager:
             self.mcp_manager.stop_all()
+        self._sub_agent_manager.stop_cleaner()
         self.memory_manager.shutdown_all()
 
     def _save_pending(self):

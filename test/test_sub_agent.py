@@ -329,3 +329,68 @@ class TestSubAgentHooks:
         mgr.on("created", lambda r: results.append("b"))
         mgr.create("test", "t")
         assert results == ["a", "b"]
+
+
+# ── TTL 测试 ──
+
+
+class TestSubAgentTTL:
+    def test_create_with_ttl_returns_id(self):
+        mgr = SubAgentManager(cleanup_interval=1)
+        rid = mgr.create_with_ttl("test", "t", ttl=300)
+        assert rid is not None
+
+    def test_ttl_stored(self):
+        mgr = SubAgentManager()
+        rid = mgr.create_with_ttl("test", "t", ttl=300)
+        assert rid in mgr._ttl
+
+    def test_no_ttl_for_normal_create(self):
+        mgr = SubAgentManager()
+        rid = mgr.create("test", "t")
+        assert rid not in mgr._ttl
+
+    def test_ttl_removed_on_completion(self):
+        mgr = SubAgentManager()
+        rid = mgr.create_with_ttl("test", "t", ttl=300)
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.COMPLETED)
+        assert rid not in mgr._ttl
+
+    def test_ttl_removed_on_fail(self):
+        mgr = SubAgentManager()
+        rid = mgr.create_with_ttl("test", "t", ttl=300)
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        mgr.update(rid, status=AgentStatus.FAILED)
+        assert rid not in mgr._ttl
+
+    def test_timeout_auto_cancels(self):
+        """TTL 过期后自动取消。"""
+        mgr = SubAgentManager(cleanup_interval=1)
+        rid = mgr.create_with_ttl("test", "t", ttl=0)  # 立即过期
+        mgr.update(rid, status=AgentStatus.RUNNING)
+        # 触发一次检查
+        mgr._check_timeouts()
+        record = mgr.get(rid)
+        assert record is not None
+        assert record.status == AgentStatus.CANCELLED, \
+            f"expected CANCELLED, got {record.status}"
+
+    def test_cleaner_start_stop(self):
+        mgr = SubAgentManager()
+        assert mgr._cleaner_thread is None
+        mgr.start_cleaner()
+        assert mgr._cleaner_thread is not None
+        assert mgr._cleaner_thread.is_alive()
+        mgr.stop_cleaner()
+        assert mgr._cleaner_thread is None
+
+    def test_double_start_cleaner(self):
+        """重复启动不创建多个线程。"""
+        mgr = SubAgentManager()
+        mgr.start_cleaner()
+        t1 = mgr._cleaner_thread
+        mgr.start_cleaner()
+        t2 = mgr._cleaner_thread
+        assert t1 is t2  # 同一个线程
+        mgr.stop_cleaner()
