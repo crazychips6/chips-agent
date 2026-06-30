@@ -22,18 +22,21 @@ _CLASSIFY_PROMPT = """你是一个消息分类器。分析用户消息，输出�
 
 intent 可选：
 - greeting: 问候打招呼
-- simple_qa: 简单常识
-- web_search: 需搜索网页
+- simple_qa: 简单常识（固定知识，不依赖时间）
+- web_search: 需要搜索网页（涉及"现在/最新/最近/流行/今天"等时间词时优先）
 - simple_coding: 简单编码
 - complex: 复杂分析
 - delegate: 需子 Agent
 - other: 以上都不属于
+
+关键规则：消息含"现在/最新/最近/流行/今天"等时间敏感词时，优先选 web_search。
 
 predicted_tools 可选：web, bash, file, orchestrate, sub_agent
 
 示例：
   你好 → {"candidates": [{"intent": "greeting", "predicted_tools": [], "score": 95}, {"intent": "other", "predicted_tools": [], "score": 5}]}
   今天天气 → {"candidates": [{"intent": "web_search", "predicted_tools": ["web"], "score": 90}, {"intent": "simple_qa", "predicted_tools": [], "score": 10}]}
+  中国现在流行男歌手 → {"candidates": [{"intent": "web_search", "predicted_tools": ["web"], "score": 90}, {"intent": "simple_qa", "predicted_tools": [], "score": 10}]}
 
 只输出 JSON。"""
 
