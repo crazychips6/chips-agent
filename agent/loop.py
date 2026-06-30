@@ -453,6 +453,7 @@ class AIAgent:
             body = json.loads(resp.read())
             reply = body.get("message", {}).get("content", "").strip()
             if reply:
+                reply += " \033[38;2;100;100;120m⚡\033[0m"
                 self.messages.append({"role": "user", "content": user_message})
                 self.messages.append({"role": "assistant", "content": reply})
                 logger.info("small_direct_reply reply=%s", reply[:60])
