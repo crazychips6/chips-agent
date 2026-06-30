@@ -3,7 +3,9 @@
 每个 intent 定义：
   model: "small" | "large"  — 走小模型还是大模型
   tools: list[str] | "all"  — 该通道下可见的工具组
-  reply: bool               — 小模型是否直接回复（仅无工具时）
+
+小模型走完整 ReAct（共享同一套 system prompt），
+只是调用不同的模型 API。
 """
 
 from __future__ import annotations
@@ -12,24 +14,20 @@ from typing import Literal
 
 RouteConfig = dict[str, dict[str, object]]
 
-# 白名单标签 → 走小模型
-SMALL_MODEL_INTENTS = {"greeting", "simple_qa", "web_search", "simple_coding"}
-
 # 黑名单工具：如果 predicted_tools 包含这些 → 强制走大模型
 COMPLEX_TOOL_TRIGGERS = {"orchestrate", "sub_agent"}
 
 # 路由表
 INTENT_ROUTES: RouteConfig = {
-    # 小模型通道 — 无工具，直接回复
-    "greeting": {"model": "small", "tools": [], "reply": True},
-    "simple_qa": {"model": "small", "tools": [], "reply": True},
-    # 小模型通道 — 有工具
-    "web_search": {"model": "small", "tools": ["web"], "reply": False},
-    "simple_coding": {"model": "small", "tools": ["bash", "file"], "reply": False},
+    # 小模型通道（暂不可用，缺 Ollama provider）
+    # "greeting": {"model": "small", "tools": []},
+    # "simple_qa": {"model": "small", "tools": []},
     # 大模型通道
-    "complex": {"model": "large", "tools": "all", "reply": False},
-    "delegate": {"model": "large", "tools": "all", "reply": False},
-    "other": {"model": "large", "tools": "all", "reply": False},
+    "complex": {"model": "large", "tools": "all"},
+    "delegate": {"model": "large", "tools": "all"},
+    "web_search": {"model": "large", "tools": "all"},
+    "simple_coding": {"model": "large", "tools": "all"},
+    "other": {"model": "large", "tools": "all"},
 }
 
 
@@ -45,29 +43,10 @@ def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:
 
     route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
     channel = route["model"]  # type: ignore[return-value]
-    if channel == "small" and route.get("reply"):
-        reason = f"intent:{intent}/direct"
-    elif channel == "small":
-        reason = f"intent:{intent}/tools:{route.get('tools', 'none')}"
-    else:
-        reason = f"intent:{intent}/default"
+    reason = f"intent:{intent}/{'small' if channel == 'small' else 'default'}"
     return (channel, reason)  # type: ignore[return-value]
 
 
 def get_route_config(intent: str) -> dict:
     """获取 intent 的路由配置。"""
     return INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
-
-
-def should_reply_direct(intent: str) -> bool:
-    """是否由小模型直接回复（无工具 ReAct）。"""
-    route = INTENT_ROUTES.get(intent)
-    if route is None:
-        return False
-    return bool(route.get("reply"))
-
-
-def get_tools_for_intent(intent: str) -> list[str] | str:
-    """获取 intent 对应的可见工具列表。"""
-    route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
-    return route["tools"]  # type: ignore[return-value]

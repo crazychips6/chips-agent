@@ -367,16 +367,15 @@ class AIAgent:
             result["status"] = result["status"].value
         return result
 
-    # ── 安全拦截 + 端侧快速通道 ──
+    # ── 安全拦截 ──
 
     def _pre_route(self, user_message: str) -> str | None:
-        """安全拦截 + 意图路由。
+        """安全拦截。
 
         Returns:
-            str   — 直接回复内容（不走 ReAct，小模型无工具直答）
-            None  — 进入 ReAct 循环
+            str   — 驳回消息
+            None  — 继续
         """
-        # ── Layer 1: GuardEngine 安全拦截 ──
         if self._guard_engine is not None:
             decision = self._guard_engine.evaluate(user_message)
             if decision.is_block():
@@ -388,25 +387,6 @@ class AIAgent:
                 except Exception:
                     pass
                 return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
-
-        # ── Layer 2: 意图分类 + 路由决策 ──
-        self._routing = self._classify_intent(user_message)
-        intent = self._routing.get("intent", "other")
-
-        # 预激活 predicted_tools
-        predicted = self._routing.get("predicted_tools", [])
-        for tool in predicted:
-            self.activate_deferred_tool(tool)
-        if predicted:
-            logger.info("TOOL_PREACTIVATE tools=%s", predicted)
-
-        # 白名单小模型直接回复（无工具）
-        from agent.intent_config import should_reply_direct
-        if should_reply_direct(intent):
-            reply = self._route_small_direct(user_message, intent)
-            if reply:
-                return reply
-
         return None
 
     def _classify_intent(self, user_message: str) -> dict:
@@ -446,53 +426,6 @@ class AIAgent:
 
         return result
 
-    def _route_small_direct(self, user_message: str, intent: str) -> str | None:
-        """小模型直接回复（无工具，单次调用）。"""
-        if self._fast_llm is None or not self._fast_llm.is_available():
-            return None
-
-        direct_prompt = {
-            "greeting": "用户向你打招呼。用友好的语气回复，10字以内。只输出回复内容。",
-            "simple_qa": "用户问一个常识问题。用简洁准确的语言回答。只输出回答内容。",
-        }
-
-        system = direct_prompt.get(intent)
-        if not system:
-            return None
-
-        import json, urllib.request
-        payload = json.dumps({
-            "model": self._fast_llm.MODEL,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message},
-            ],
-            "stream": False,
-            "options": {"temperature": 0.3, "num_predict": 64},
-        }).encode()
-
-        try:
-            req = urllib.request.Request(
-                f"{self._fast_llm.OLLAMA_BASE}/api/chat",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            resp = urllib.request.urlopen(req, timeout=10)
-            body = json.loads(resp.read())
-            reply = body.get("message", {}).get("content", "").strip()
-            if reply:
-                reply += " \033[38;2;100;100;120m⚡\033[0m"
-                self.messages.append({"role": "user", "content": user_message})
-                self.messages.append({"role": "assistant", "content": reply})
-                logger.info("small_direct_reply intent=%s reply=%s", intent, reply[:60])
-                return reply
-        except Exception as exc:
-            logger.warning("small_direct_failed intent=%s error=%s", intent, exc)
-        return None
-
-    # ── 对话准备 ──
-
     def _prepare_conversation(self, user_message: str) -> str:
         """构建 system prompt + 初始化本轮对话环境。返回 system prompt 字符串。"""
         self._ensure_cache()
@@ -508,21 +441,8 @@ class AIAgent:
         from tool.toolsets import build_availability_table
         avail = build_availability_table()
 
-        # 构建延迟工具列表（小模型通道不展示）
-        is_small_channel = self._routing.get("channel") == "small"
-        deferred_block = self._build_deferred_block() if not is_small_channel else ""
-
-        # 小模型通道：限制可见工具
-        if self._routing.get("channel") == "small":
-            intent = self._routing.get("intent", "other")
-            from agent.intent_config import get_tools_for_intent
-            allowed_tools = get_tools_for_intent(intent)
-            if isinstance(allowed_tools, list):
-                # 只保留允许的工具
-                allowed = set(allowed_tools) & self.registry.tool_names
-                self.tool_names = (self.tool_names & allowed) | self._extra_tool_names
-                logger.info("small_channel_tools intent=%s tools=%s", intent, sorted(self.tool_names))
-            # else "all" → 不限制
+        # 构建延迟工具列表
+        deferred_block = self._build_deferred_block()
 
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
@@ -616,7 +536,7 @@ class AIAgent:
         set_turn_number(self.turn_count)
         self.clear_interrupt()  # 清除上一轮可能残留的中断信号
 
-        # 阶段一：安全拦截 + 端侧快道（GuardEngine + FastLLM）
+        # 阶段一：安全拦截
         reply = self._pre_route(user_message)
         if reply is not None:
             return reply
@@ -624,7 +544,12 @@ class AIAgent:
         # 阶段二：对话准备（system prompt + memory 预热）
         system = self._prepare_conversation(user_message)
 
-        # 阶段三：ReAct 循环
+        # 阶段三：意图分类 + 工具预激活
+        self._routing = self._classify_intent(user_message)
+        for tool in self._routing.get("predicted_tools", []):
+            self.activate_deferred_tool(tool)
+
+        # 阶段四：ReAct 循环（所有模型共享同一套 system prompt）
         rounds = [] if self.debug_context else None
         last_text_reply = None
         try:
@@ -692,7 +617,7 @@ class AIAgent:
                         _on_chunk(text)  # 立即输出，不缓冲
 
                     result = self.gateway.chat_stream(
-                        messages=api_messages, model=self.model,
+                        messages=api_messages, model=model,
                         max_tokens=4096, tools=tools if tools else None,
                         on_chunk=_collecting_chunk,
                     )
@@ -701,7 +626,7 @@ class AIAgent:
                         print()
                 else:
                     result = self.gateway.chat(
-                        messages=api_messages, model=self.model,
+                        messages=api_messages, model=model,
                         max_tokens=4096, tools=tools if tools else None,
                     )
                 _llm_duration = int((time.time() - _llm_t0) * 1000)
