@@ -19,9 +19,9 @@ COMPLEX_TOOL_TRIGGERS = {"orchestrate", "sub_agent"}
 
 # 路由表
 INTENT_ROUTES: RouteConfig = {
-    # 小模型通道（暂不可用，缺 Ollama provider）
-    # "greeting": {"model": "small", "tools": []},
-    # "simple_qa": {"model": "small", "tools": []},
+    # 小模型通道（通过 Ollama provider 执行完整 ReAct）
+    "greeting": {"model": "small", "tools": []},
+    "simple_qa": {"model": "small", "tools": []},
     # 大模型通道
     "complex": {"model": "large", "tools": "all"},
     "delegate": {"model": "large", "tools": "all"},

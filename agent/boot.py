@@ -107,6 +107,12 @@ def run(args: object) -> None:
         gateway=recorder,
     )
     agent.registry = registry
+
+    # 端侧模型 gateway（Ollama OpenAI 兼容接口）
+    agent._ollama_gateway = OpenAIProvider(
+        api_key="ollama",
+        base_url="http://localhost:11434/v1",
+    )
     toolset_names = [n.strip() for n in args.toolset.split(",")]
     agent._resolve_tool_names()
 

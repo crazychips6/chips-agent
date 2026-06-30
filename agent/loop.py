@@ -400,8 +400,8 @@ class AIAgent:
         from agent.intent_config import classify_route
         channel, reason = classify_route(result["intent"], result.get("predicted_tools", []))
 
-        # 小模型通道带工具 → 设置模型覆盖
-        if channel == "small" and result.get("predicted_tools"):
+        # 小模型通道 → 设置模型覆盖（走 Ollama gateway）
+        if channel == "small":
             if self._fast_llm is not None:
                 result["_model_override"] = self._fast_llm.MODEL
 
@@ -570,6 +570,7 @@ class AIAgent:
                 )
                 self._check_vision_capability(api_messages)
                 model = self._routing.get("_model_override") or self.model
+                gw = self._ollama_gateway if self._routing.get("_model_override") else self.gateway
                 kwargs = {
                     "model": model,
                     "messages": api_messages,
@@ -616,7 +617,7 @@ class AIAgent:
                         _buf.append(text)
                         _on_chunk(text)  # 立即输出，不缓冲
 
-                    result = self.gateway.chat_stream(
+                    result = gw.chat_stream(
                         messages=api_messages, model=model,
                         max_tokens=4096, tools=tools if tools else None,
                         on_chunk=_collecting_chunk,
@@ -625,7 +626,7 @@ class AIAgent:
                     if not result.tool_calls:
                         print()
                 else:
-                    result = self.gateway.chat(
+                    result = gw.chat(
                         messages=api_messages, model=model,
                         max_tokens=4096, tools=tools if tools else None,
                     )
