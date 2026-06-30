@@ -92,4 +92,5 @@ registry.register(
     },
     handler=_handle,
     group="agent",
+    model_scope="large",
 )

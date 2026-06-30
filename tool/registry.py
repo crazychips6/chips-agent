@@ -35,6 +35,8 @@ class ToolEntry:
     max_result_size_chars: int = 100_000
     # 工具分组：core（永远加载）| dev | agent | ...
     group: str = "core"
+    # 模型可见范围：all（所有模型）| large（仅大模型）
+    model_scope: str = "all"
 
 
 class ToolRegistry:
@@ -56,6 +58,7 @@ class ToolRegistry:
         is_async: bool = False,
         max_result_size_chars: int = 100_000,
         group: str = "core",
+        model_scope: str = "all",
     ):
         with self._lock:
             self._entries[name] = ToolEntry(
@@ -67,6 +70,7 @@ class ToolRegistry:
                 is_async=is_async,
                 max_result_size_chars=max_result_size_chars,
                 group=group,
+                model_scope=model_scope,
             )
             self._generation += 1
 
@@ -76,10 +80,11 @@ class ToolRegistry:
             self._check_fn_cache.pop(name, None)
             self._generation += 1
 
-    def get_definitions(self, tool_names: set[str]) -> list[dict]:
+    def get_definitions(self, tool_names: set[str], *, model_scope: str | None = None) -> list[dict]:
         """返回指定工具的 OpenAI function-calling schema 列表。
 
         check_fn 返回 False 的工具会被过滤掉，结果有 30s 缓存。
+        model_scope 非空时，只返回匹配该范围的工具（all 匹配任何 scope）。
         """
         result = []
         now = time.time()
@@ -87,6 +92,9 @@ class ToolRegistry:
             for name in tool_names:
                 entry = self._entries.get(name)
                 if not entry:
+                    continue
+                # 模型范围过滤
+                if model_scope and entry.model_scope != "all" and entry.model_scope != model_scope:
                     continue
                 if entry.check_fn:
                     cached = self._check_fn_cache.get(name)

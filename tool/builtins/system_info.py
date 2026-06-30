@@ -404,4 +404,5 @@ registry.register(
     schema=SYSTEM_INFO_SCHEMA,
     handler=_handle,
     group="dev",
+    model_scope="large",
 )

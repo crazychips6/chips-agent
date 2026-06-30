@@ -73,4 +73,5 @@ registry.register(
     },
     handler=handle_screenshot,
     group="dev",
+    model_scope="large",
 )

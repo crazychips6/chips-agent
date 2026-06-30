@@ -400,10 +400,13 @@ class AIAgent:
         from agent.intent_config import classify_route
         channel, reason = classify_route(result["intent"], result.get("predicted_tools", []))
 
-        # 小模型通道 → 设置模型覆盖（走 Ollama gateway）
+        # 小模型通道 → 设置模型覆盖 + 模型可见范围
         if channel == "small":
             if self._fast_llm is not None:
                 result["_model_override"] = self._fast_llm.MODEL
+            result["_model_scope"] = "small"
+        else:
+            result["_model_scope"] = "large"
 
         result["channel"] = channel
         result["route_reason"] = reason
@@ -429,30 +432,40 @@ class AIAgent:
     def _prepare_conversation(self, user_message: str) -> str:
         """构建 system prompt + 初始化本轮对话环境。返回 system prompt 字符串。"""
         self._ensure_cache()
-        prefetch = self.memory_manager.prefetch_all(user_message)
 
-        # 经验知识匹配（技巧类，非事实）
-        from knowledge.manager import KnowledgeManager
-        if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
-            self._knowledge_manager = KnowledgeManager()
-        knowledge_entries = self._knowledge_manager.match(user_message)
-        knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
+        is_small = self._routing.get("channel") == "small"
 
-        from tool.toolsets import build_availability_table
-        avail = build_availability_table()
+        if is_small:
+            # 小模型通道：只有冷冻层（含 CLAUDE.md）+ 时间戳，无动态层
+            dynamic = self.prompt_builder.build_dynamic(
+                prefetch="",
+                timestamp=str(datetime.date.today()),
+                toolset_availability="",
+                knowledge="",
+            )
+        else:
+            # 大模型通道：完整 prompt
+            prefetch = self.memory_manager.prefetch_all(user_message)
+            from knowledge.manager import KnowledgeManager
+            if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
+                self._knowledge_manager = KnowledgeManager()
+            knowledge_entries = self._knowledge_manager.match(user_message)
+            knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
+            from tool.toolsets import build_availability_table
+            avail = build_availability_table()
 
-        # 构建延迟工具列表
-        deferred_block = self._build_deferred_block()
+            dynamic = self.prompt_builder.build_dynamic(
+                prefetch=prefetch,
+                timestamp=str(datetime.date.today()),
+                toolset_availability=avail,
+                knowledge=knowledge,
+            )
 
-        dynamic = self.prompt_builder.build_dynamic(
-            prefetch=prefetch,
-            timestamp=str(datetime.date.today()),
-            toolset_availability=avail,
-            knowledge=knowledge,
-        )
         system = (self._frozen_base or "") + "\n\n" + dynamic
-        if deferred_block:
-            system += "\n\n" + deferred_block
+        if not is_small:
+            deferred_block = self._build_deferred_block()
+            if deferred_block:
+                system += "\n\n" + deferred_block
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)
@@ -582,7 +595,18 @@ class AIAgent:
                 if self.registry or self.memory_manager.providers:
                     tools = []
                     if self.registry:
-                        tools.extend(self.registry.get_definitions(self.tool_names))
+                        scope = self._routing.get("_model_scope")
+                        defs = self.registry.get_definitions(self.tool_names, model_scope=scope)
+                        # 小模型通道：根据 intent 只保留允许的工具
+                        if scope == "small":
+                            intent = self._routing.get("intent", "other")
+                            from agent.intent_config import get_tools_for_intent
+                            allowed = get_tools_for_intent(intent)
+                            if isinstance(allowed, list):
+                                allowed_set = set(allowed)
+                                defs = [d for d in defs
+                                        if d.get("function", d).get("name") in allowed_set]
+                        tools.extend(defs)
                     mem_schemas = self.memory_manager.get_all_tool_schemas()
                     existing_names = {s.get("function", s).get("name") for s in tools}
                     for s in mem_schemas:

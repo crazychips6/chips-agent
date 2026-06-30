@@ -395,4 +395,5 @@ registry.register(
     schema=PROCESS_SCHEMA,
     handler=_handle,
     group="dev",
+    model_scope="large",
 )

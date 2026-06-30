@@ -403,4 +403,5 @@ registry.register(
     toolset="core",
     schema=ORCHESTRATE_SCHEMA,
     handler=_handle,
+    model_scope="large",
 )

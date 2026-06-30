@@ -22,13 +22,20 @@ INTENT_ROUTES: RouteConfig = {
     # 小模型通道（通过 Ollama provider 执行完整 ReAct）
     "greeting": {"model": "small", "tools": []},
     "simple_qa": {"model": "small", "tools": []},
+    # 小模型通道 — 帯工具
+    "web_search": {"model": "small", "tools": ["web"]},
+    "simple_coding": {"model": "small", "tools": ["bash", "file"]},
     # 大模型通道
     "complex": {"model": "large", "tools": "all"},
     "delegate": {"model": "large", "tools": "all"},
-    "web_search": {"model": "large", "tools": "all"},
-    "simple_coding": {"model": "large", "tools": "all"},
     "other": {"model": "large", "tools": "all"},
 }
+
+
+def get_tools_for_intent(intent: str) -> list[str] | str:
+    """获取 intent 对应的可见工具列表。"""
+    route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
+    return route["tools"]  # type: ignore[return-value]
 
 
 def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:

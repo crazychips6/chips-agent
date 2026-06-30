@@ -237,4 +237,5 @@ registry.register(
     schema=CALENDAR_SCHEMA,
     handler=_handle,
     group="dev",
+    model_scope="large",
 )
