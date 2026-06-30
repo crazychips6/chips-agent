@@ -436,13 +436,14 @@ class AIAgent:
         is_small = self._routing.get("channel") == "small"
 
         if is_small:
-            # 小模型通道：只有冷冻层（含 CLAUDE.md）+ 时间戳，无动态层
-            dynamic = self.prompt_builder.build_dynamic(
-                prefetch="",
-                timestamp=str(datetime.date.today()),
-                toolset_availability="",
-                knowledge="",
-            )
+            # 小模型通道：极简 prompt，只有一句话 + 用户消息 + 一个工具
+            system = "你是 chps。用中文回答。"
+            self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
+            self.memory_manager.initialize_all(session_id=self.session_id)
+            self._tool_call_history = defaultdict(int)
+            self._consecutive_failures = 0
+            self._save_pending()
+            return system
         else:
             # 大模型通道：完整 prompt
             prefetch = self.memory_manager.prefetch_all(user_message)
