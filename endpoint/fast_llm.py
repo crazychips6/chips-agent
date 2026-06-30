@@ -1,9 +1,7 @@
-"""FastLLM — 端侧小模型快速通道
+"""FastLLM — 端侧小模型分类器
 
-在 GuardEngine（安全拦截）之后、ReAct 循环之前插入。
-
-小模型只做三件事：问候、致谢、告别。
-在这三个范围内自由回复，其他一律放行进 ReAct。
+不再做回复拦截，只做意图分类 + 工具预测。
+路由层根据分类结果决定走小模型还是大模型通道。
 
 不可用时无缝降级（Ollama 不通 → 跳过）。
 """
@@ -17,29 +15,46 @@ import urllib.request
 
 logger = logging.getLogger("chips.endpoint.fast_llm")
 
-_CLASSIFY_PROMPT = """你是一个消息分类器。判断用户消息属于哪一类，只输出类别名。
+_CLASSIFY_PROMPT = """你是一个消息分类器。分析用户消息，输出 JSON。
 
-类别：
+返回格式：
+{
+    "intent": "intent 名",
+    "predicted_tools": ["工具名", ...],
+    "confidence": "high/low"
+}
+
+intent 列表：
 - greeting: 问候、打招呼（你好/hi/hello/早上好）
-- thanks: 感谢、致谢（谢谢/感谢/多谢）
-- goodbye: 告别、再见（再见/拜拜/bye）
+- simple_qa: 简单知识问答（不需要搜索就知道的常识）
+- web_search: 需要搜索网页（查天气、查资料、搜信息）
+- simple_coding: 简单编码（写脚本、改配置、调命令）
+- complex: 复杂任务（多步骤、分析、调研、项目管理）
+- delegate: 需要委派子 Agent（调查文件、多任务并行）
 - other: 以上都不属于
 
-示例：
-  你好 → greeting
-  谢谢 → thanks
-  再见 → goodbye
-  帮我搜索一下 → other
-  今天天气怎么样 → other
-  调查这个文件 → other
+predicted_tools：从以下列表中选择可能需要的工具
+- web：需要搜索互联网
+- bash：需要执行命令
+- file：需要读/写/搜索文件
+- orchestrate：需要委派子 Agent 或编排多任务
+- sub_agent：需要查询子 Agent 记录
 
-只输出类别名，不要其他内容。"""
+示例：
+  你好                       → {"intent": "greeting", "predicted_tools": [], "confidence": "high"}
+  法国的首都是哪里             → {"intent": "simple_qa", "predicted_tools": [], "confidence": "high"}
+  今天天气怎么样               → {"intent": "web_search", "predicted_tools": ["web"], "confidence": "high"}
+  帮我写个Python脚本算数据      → {"intent": "simple_coding", "predicted_tools": ["bash", "file"], "confidence": "high"}
+  调查项目目录下所有文件         → {"intent": "delegate", "predicted_tools": ["orchestrate"], "confidence": "high"}
+  用Rust重构整个后端服务         → {"intent": "complex", "predicted_tools": ["bash", "file"], "confidence": "medium"}
+
+只输出 JSON，不要其他内容。"""
 
 
 class FastLLM:
-    """端侧小模型快速通道。
+    """端侧小模型分类器。
 
-    只处理 greeting / thanks / goodbye 三类，其他全放行。
+    只做分类和工具预测，不回复内容。
     """
 
     OLLAMA_BASE = "http://localhost:11434"
@@ -47,8 +62,6 @@ class FastLLM:
 
     def __init__(self):
         self._available: bool | None = None
-
-    # ── 可用性检测 ──
 
     def is_available(self) -> bool:
         if self._available is True:
@@ -69,28 +82,14 @@ class FastLLM:
     def reset_availability(self):
         self._available = None
 
-    # ── 分类 + 回复 ──
+    def classify(self, user_message: str) -> dict:
+        """分类用户消息，返回 {intent, predicted_tools, confidence}。
 
-    def answer(self, user_message: str) -> str | None:
-        """尝试用端侧小模型回复。
-
-        先分类，只有 greeting/thanks/goodbye 才回复，其他放行。
-
-        Returns:
-            回复文本（greeting/thanks/goodbye）
-            None（other → 放行进 ReAct）
+        失败时安全降级返回 other。
         """
-        category = self._classify(user_message)
-        if category == "other":
-            return None
-        if category:
-            return self._reply(category, user_message)
-        return None
-
-    def _classify(self, user_message: str) -> str | None:
-        """分类用户消息。返回 greeting / thanks / goodbye / other / None（失败时）。"""
         payload = json.dumps({
             "model": self.MODEL,
+            "format": "json",
             "messages": [
                 {"role": "system", "content": _CLASSIFY_PROMPT},
                 {"role": "user", "content": user_message},
@@ -98,7 +97,7 @@ class FastLLM:
             "stream": False,
             "options": {
                 "temperature": 0.0,
-                "num_predict": 16,
+                "num_predict": 128,
             },
         }).encode()
 
@@ -112,61 +111,23 @@ class FastLLM:
         try:
             resp = urllib.request.urlopen(req, timeout=10)
             body = json.loads(resp.read())
-            content = body.get("message", {}).get("content", "").strip().lower()
-            if content in ("greeting", "thanks", "goodbye", "other"):
-                logger.debug("fast_llm_classify result=%s msg=%s", content, user_message[:30])
-                return content
-            logger.debug("fast_llm_classify_unexpected result=%s", content)
-            return "other"  # 分类异常时安全放行
+            content = body.get("message", {}).get("content", "")
+            content = content.strip()
+            if content.startswith("```"):
+                lines = content.split("\n")
+                content = "\n".join(lines[1:-1]) if len(lines) > 2 else lines[-1]
+            result = json.loads(content)
+            intent = result.get("intent", "other")
+            tools = result.get("predicted_tools", [])
+            confidence = result.get("confidence", "low")
+            logger.info("fast_llm_classify intent=%s tools=%s confidence=%s",
+                        intent, tools, confidence)
+            return {"intent": intent, "predicted_tools": tools, "confidence": confidence}
         except Exception as exc:
             logger.warning("fast_llm_classify_failed: %s", exc)
-            return None
+            return {"intent": "other", "predicted_tools": [], "confidence": "low"}
 
-    def _reply(self, category: str, user_message: str) -> str | None:
-        """在指定分类范围内让小模型自由回复。"""
-        category_prompt = {
-            "greeting": "用户向你打招呼。用友好的语气回复，10 字以内。只输出回复内容。",
-            "thanks": "用户向你道谢。用礼貌的语气回复，10 字以内。只输出回复内容。",
-            "goodbye": "用户和你告别。用友好的语气回复，10 字以内。只输出回复内容。",
-        }
-
-        system = category_prompt.get(category, "")
-        if not system:
-            return None
-
-        payload = json.dumps({
-            "model": self.MODEL,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_message},
-            ],
-            "stream": False,
-            "options": {
-                "temperature": 0.3,
-                "num_predict": 32,
-            },
-        }).encode()
-
-        req = urllib.request.Request(
-            f"{self.OLLAMA_BASE}/api/chat",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        try:
-            resp = urllib.request.urlopen(req, timeout=10)
-            body = json.loads(resp.read())
-            reply = body.get("message", {}).get("content", "").strip()
-            if reply:
-                logger.info("fast_llm_reply category=%s reply=%s", category, reply[:60])
-                return reply
-            return None
-        except Exception as exc:
-            logger.warning("fast_llm_reply_failed category=%s error=%s", category, exc)
-            return None
-
-    # ── Trace 分析（学习用） ──
+    # ── Trace 分析（保留，不变） ──
 
     _ANALYZE_TRACE_PROMPT = """你是一个 agent 执行分析器。分析完整的工具调用 trace，提取可复用的经验知识。
 
@@ -188,7 +149,6 @@ class FastLLM:
 只返回 JSON。"""
 
     def analyze_trace(self, trace: dict) -> dict:
-        """分析 trace，提取最优路径和失败模式。"""
         steps = []
         for i, tc in enumerate(trace.get("tool_calls", []), 1):
             name = tc.get("name", "?")
@@ -215,15 +175,8 @@ class FastLLM:
             "options": {"temperature": 0.1, "num_predict": 256},
         }).encode()
 
-        req = urllib.request.Request(
-            f"{self.OLLAMA_BASE}/api/chat",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            resp = urllib.request.urlopen(req, timeout=15)
+            resp = urllib.request.urlopen(payload, timeout=15)
             body = json.loads(resp.read())
             content = body.get("message", {}).get("content", "")
             content = content.strip()

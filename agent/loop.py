@@ -68,6 +68,8 @@ class AIAgent:
         self.tool_names: set[str] = set()
         # ── 工具分组：core 组直接加载，其他组延迟（LLM 通过 tool_request 激活）──
         self._deferred_tool_names: set[str] = set()
+        # 当前请求的路由决策（由 _pre_route 设置）
+        self._routing: dict = {}
         # 插件/MCP 注册的额外工具名
         self._extra_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
@@ -286,8 +288,7 @@ class AIAgent:
             lines.extend(by_group[g])
             lines.append("")
         lines.append("</available-deferred-tools>")
-        return "
-".join(lines)
+        return "\n".join(lines)
 
     # ── 子 Agent 管理 ──
 
@@ -369,11 +370,11 @@ class AIAgent:
     # ── 安全拦截 + 端侧快速通道 ──
 
     def _pre_route(self, user_message: str) -> str | None:
-        """安全拦截 + 端侧快速通道。
+        """安全拦截 + 意图路由。
 
         Returns:
-            str  — 直接回复内容（不走主 LLM）
-            None — 继续走 ReAct 循环
+            str   — 直接回复内容（不走 ReAct，小模型无工具直答）
+            None  — 进入 ReAct 循环
         """
         # ── Layer 1: GuardEngine 安全拦截 ──
         if self._guard_engine is not None:
@@ -382,16 +383,88 @@ class AIAgent:
                 logger.info("guard_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
                 return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
 
-        # ── Layer 2: FastLLM 端侧快速通道 ──
+        # ── Layer 2: 意图分类 + 路由决策 ──
+        self._routing = self._classify_intent(user_message)
+        intent = self._routing.get("intent", "other")
+
+        # 预激活 predicted_tools
+        for tool in self._routing.get("predicted_tools", []):
+            self.activate_deferred_tool(tool)
+
+        # 白名单小模型直接回复（无工具）
+        from agent.intent_config import should_reply_direct
+        if should_reply_direct(intent):
+            reply = self._route_small_direct(user_message, intent)
+            if reply:
+                return reply
+
+        return None
+
+    def _classify_intent(self, user_message: str) -> dict:
+        """调用小模型分类，返回路由决策。"""
         if self._fast_llm is not None and self._fast_llm.is_available():
-            reply = self._fast_llm.answer(user_message)
-            if reply is not None:
+            result = self._fast_llm.classify(user_message)
+        else:
+            result = {"intent": "other", "predicted_tools": [], "confidence": "low"}
+
+        # 检查黑名单：如果 predicted_tools 含复杂工具 → 强制走大模型
+        from agent.intent_config import classify_route
+        channel = classify_route(result["intent"], result.get("predicted_tools", []))
+
+        # 小模型通道带工具 → 设置模型覆盖
+        if channel == "small" and result.get("predicted_tools"):
+            if self._fast_llm is not None:
+                result["_model_override"] = self._fast_llm.MODEL
+                logger.info("small_channel_model_override model=%s", self._fast_llm.MODEL)
+
+        result["channel"] = channel
+        logger.info("intent_route intent=%s tools=%s channel=%s",
+                     result["intent"], result.get("predicted_tools"), channel)
+        return result
+
+    def _route_small_direct(self, user_message: str, intent: str) -> str | None:
+        """小模型直接回复（无工具，单次调用）。"""
+        if self._fast_llm is None or not self._fast_llm.is_available():
+            return None
+
+        direct_prompt = {
+            "greeting": "用户向你打招呼。用友好的语气回复，10字以内。只输出回复内容。",
+            "simple_qa": "用户问一个常识问题。用简洁准确的语言回答。只输出回答内容。",
+        }
+
+        system = direct_prompt.get(intent)
+        if not system:
+            return None
+
+        import json, urllib.request
+        payload = json.dumps({
+            "model": self._fast_llm.MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_message},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.3, "num_predict": 64},
+        }).encode()
+
+        try:
+            req = urllib.request.Request(
+                f"{self._fast_llm.OLLAMA_BASE}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            body = json.loads(resp.read())
+            reply = body.get("message", {}).get("content", "").strip()
+            if reply:
                 reply += " \033[38;2;100;100;120m[端侧]\033[0m"
                 self.messages.append({"role": "user", "content": user_message})
                 self.messages.append({"role": "assistant", "content": reply})
-                logger.info("fast_llm_reply reply=%s", reply[:60])
+                logger.info("small_direct_reply intent=%s reply=%s", intent, reply[:60])
                 return reply
-
+        except Exception as exc:
+            logger.warning("small_direct_failed intent=%s error=%s", intent, exc)
         return None
 
     # ── 对话准备 ──
@@ -411,8 +484,21 @@ class AIAgent:
         from tool.toolsets import build_availability_table
         avail = build_availability_table()
 
-        # 构建延迟工具列表
-        deferred_block = self._build_deferred_block()
+        # 构建延迟工具列表（小模型通道不展示）
+        is_small_channel = self._routing.get("channel") == "small"
+        deferred_block = self._build_deferred_block() if not is_small_channel else ""
+
+        # 小模型通道：限制可见工具
+        if self._routing.get("channel") == "small":
+            intent = self._routing.get("intent", "other")
+            from agent.intent_config import get_tools_for_intent
+            allowed_tools = get_tools_for_intent(intent)
+            if isinstance(allowed_tools, list):
+                # 只保留允许的工具
+                allowed = set(allowed_tools) & self.registry.tool_names
+                self.tool_names = (self.tool_names & allowed) | self._extra_tool_names
+                logger.info("small_channel_tools intent=%s tools=%s", intent, sorted(self.tool_names))
+            # else "all" → 不限制
 
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
@@ -534,8 +620,9 @@ class AIAgent:
                     [{"role": "system", "content": system}, *self.messages]
                 )
                 self._check_vision_capability(api_messages)
+                model = self._routing.get("_model_override") or self.model
                 kwargs = {
-                    "model": self.model,
+                    "model": model,
                     "messages": api_messages,
                     "max_tokens": 4096,
                 }

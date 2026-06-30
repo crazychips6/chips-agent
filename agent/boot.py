@@ -107,6 +107,7 @@ def run(args: object) -> None:
         gateway=recorder,
     )
     agent.registry = registry
+    toolset_names = [n.strip() for n in args.toolset.split(",")]
     agent._resolve_tool_names()
 
     context_files = search_context_files()
