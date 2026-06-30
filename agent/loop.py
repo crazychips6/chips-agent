@@ -429,6 +429,39 @@ class AIAgent:
 
         return result
 
+    def _route_small_direct(self, user_message: str) -> str | None:
+        """小模型直答（不走 ReAct，极速通道）。"""
+        if self._fast_llm is None or not self._fast_llm.is_available():
+            return None
+
+        import json, urllib.request
+        payload = json.dumps({
+            "model": self._fast_llm.MODEL,
+            "messages": [{"role": "user", "content": user_message}],
+            "stream": False,
+            "options": {"num_predict": 128},
+        }).encode()
+
+        try:
+            req = urllib.request.Request(
+                f"{self._fast_llm.OLLAMA_BASE}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=15)
+            body = json.loads(resp.read())
+            reply = body.get("message", {}).get("content", "").strip()
+            if reply:
+                self.messages.append({"role": "user", "content": user_message})
+                self.messages.append({"role": "assistant", "content": reply})
+                logger.info("small_direct_reply reply=%s", reply[:60])
+                return reply
+        except Exception as exc:
+            logger.warning("small_direct_failed: %s", exc)
+            return None
+        return None
+
     def _prepare_conversation(self, user_message: str) -> str:
         """构建 system prompt + 初始化本轮对话环境。返回 system prompt 字符串。"""
         self._ensure_cache()
@@ -561,10 +594,16 @@ class AIAgent:
         for tool in self._routing.get("predicted_tools", []):
             self.activate_deferred_tool(tool)
 
-        # 阶段三：对话准备（system prompt + memory 预热）
+        # 阶段三：小模型直答（不走 ReAct，极速通道）
+        if self._routing.get("channel") == "small":
+            reply = self._route_small_direct(user_message)
+            if reply is not None:
+                return reply
+
+        # 阶段四：对话准备（system prompt + memory 预热）
         system = self._prepare_conversation(user_message)
 
-        # 阶段四：ReAct 循环（所有模型共享同一套 system prompt）
+        # 阶段五：ReAct 循环
         rounds = [] if self.debug_context else None
         last_text_reply = None
         try:
