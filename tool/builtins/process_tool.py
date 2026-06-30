@@ -394,4 +394,5 @@ registry.register(
     toolset="process",
     schema=PROCESS_SCHEMA,
     handler=_handle,
+    group="dev",
 )

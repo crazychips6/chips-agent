@@ -72,4 +72,5 @@ registry.register(
         },
     },
     handler=handle_screenshot,
+    group="dev",
 )

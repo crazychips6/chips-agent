@@ -187,4 +187,5 @@ registry.register(
         },
     },
     handler=_handle,
+    group="agent",
 )

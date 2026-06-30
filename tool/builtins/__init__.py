@@ -17,3 +17,4 @@ import tool.builtins.process_tool  # noqa: F401
 import tool.builtins.agent_tools  # noqa: F401
 import tool.builtins.orchestrate_tool  # noqa: F401
 import tool.builtins.sub_agent_tools  # noqa: F401
+import tool.builtins.deferred_tools  # noqa: F401

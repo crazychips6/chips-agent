@@ -236,4 +236,5 @@ registry.register(
     toolset="calendar",
     schema=CALENDAR_SCHEMA,
     handler=_handle,
+    group="dev",
 )

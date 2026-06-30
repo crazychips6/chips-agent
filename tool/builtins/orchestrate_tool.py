@@ -1,4 +1,4 @@
-﻿"""orchestrate 工具 — 多 Agent 编排
+"""orchestrate 工具 — 多 Agent 编排
 
 四种模式：
   1. single     — 单步委派（原 delegate_task）

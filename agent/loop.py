@@ -66,13 +66,9 @@ class AIAgent:
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
-        # 启用的 toolset 名列表（动态开关用），由 cli.py 注入
-        self.enabled_toolsets: list[str] = []
-        # ── Deferred Tools：LLM 启用后当前轮即可激活，永久可用直到 disable ──
-        self.active_toolsets: set[str] = set()
-        # 启动时 --toolset 指定的常驻 toolset
-        self.permanent_toolsets: list[str] = []
-        # 插件/MCP 注册的额外工具名（不受 toolset 开关影响）
+        # ── 工具分组：core 组直接加载，其他组延迟（LLM 通过 tool_request 激活）──
+        self._deferred_tool_names: set[str] = set()
+        # 插件/MCP 注册的额外工具名
         self._extra_tool_names: set[str] = set()
         self.memory_manager = MemoryManager()
         # 插件管理器，由 cli.py 在启动时初始化注入
@@ -219,17 +215,79 @@ class AIAgent:
     # ── 工具解析（Deferred / Permanent / Core） ──
 
     def _resolve_tool_names(self):
-        """从 active_toolsets + permanent_toolsets + CORE_ALWAYS_ON 重新计算 tool_names。"""
+        """按工具分组重新计算 tool_names 和 _deferred_tool_names。
+
+        core 组工具永远加载，其他组工具默认延迟。
+        """
         if not self.registry:
             return
-        from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
-        core_tools = CORE_ALWAYS_ON & self.registry.tool_names
-        active_tools = set(resolve_multiple_toolsets(list(self.active_toolsets))) if self.active_toolsets else set()
-        perm_tools = set(resolve_multiple_toolsets(self.permanent_toolsets)) if self.permanent_toolsets else set()
-        self.tool_names = core_tools | active_tools | perm_tools | self._extra_tool_names
+        from agent.tool_groups import DEFERRED_GROUPS
 
-        self.tool_names &= self.registry.tool_names
+        # 重新计算 deferred 列表：清理已不存在或已被激活的工具
+        all_registered = self.registry.tool_names
+        self._deferred_tool_names &= all_registered
+
+        registered = self.registry._entries
+
+        core_tools: set[str] = set()
+        deferred_tools: set[str] = set()
+
+        for name, entry in registered.items():
+            if entry.group == "core":
+                core_tools.add(name)
+            elif entry.group in DEFERRED_GROUPS:
+                deferred_tools.add(name)
+
+        # core 工具 + 已激活的 deferred 工具 + MCP/插件工具
+        activated = self._deferred_tool_names
+        self.tool_names = (core_tools | activated | self._extra_tool_names) & all_registered
+
+        # 未激活的 deferred 工具列表（供 prompt 显示）
+        self._deferred_tool_names = (deferred_tools - self.tool_names) & all_registered
+
+    def activate_deferred_tool(self, name: str) -> bool:
+        """将延迟工具激活到当前会话。返回是否成功。"""
+        if not self.registry:
+            return False
+        entry = self.registry._entries.get(name)
+        if entry is None:
+            return False
+        if entry.group == "core":
+            return True  # core 工具已经在 tool_names 里
+        self._deferred_tool_names.discard(name)
+        self.tool_names.add(name)
+        logger.info("deferred_tool_activated name=%s", name)
+        return True
+
+    def _build_deferred_block(self) -> str:
+        if not self._deferred_tool_names:
+            return ""
+        from agent.tool_groups import TOOL_GROUPS
+        from tool.registry import registry
+        lines = ["<available-deferred-tools>"]
+        lines.append("以下工具已注册但未激活，可用 tool_describe 查看详情、tool_request 激活：")
+        lines.append("")
+        by_group: dict[str, list[str]] = {}
+        for name in sorted(self._deferred_tool_names):
+            entry = registry._entries.get(name)
+            if entry is None:
+                continue
+            g = entry.group
+            if g not in by_group:
+                by_group[g] = []
+            fn = entry.schema.get("function", entry.schema)
+            desc = fn.get("description", "")[:30]
+            by_group[g].append(f"  {name}: {desc}")
+        for g in sorted(by_group):
+            group_info = TOOL_GROUPS.get(g, {})
+            label = group_info.get("name", g)
+            lines.append(f"[{label}]")
+            lines.extend(by_group[g])
+            lines.append("")
+        lines.append("</available-deferred-tools>")
+        return "
+".join(lines)
 
     # ── 子 Agent 管理 ──
 
@@ -352,6 +410,10 @@ class AIAgent:
 
         from tool.toolsets import build_availability_table
         avail = build_availability_table()
+
+        # 构建延迟工具列表
+        deferred_block = self._build_deferred_block()
+
         dynamic = self.prompt_builder.build_dynamic(
             prefetch=prefetch,
             timestamp=str(datetime.date.today()),
@@ -359,6 +421,8 @@ class AIAgent:
             knowledge=knowledge,
         )
         system = (self._frozen_base or "") + "\n\n" + dynamic
+        if deferred_block:
+            system += "\n\n" + deferred_block
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)

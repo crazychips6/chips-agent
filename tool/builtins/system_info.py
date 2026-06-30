@@ -403,4 +403,5 @@ registry.register(
     toolset="system",
     schema=SYSTEM_INFO_SCHEMA,
     handler=_handle,
+    group="dev",
 )

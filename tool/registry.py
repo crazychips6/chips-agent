@@ -33,6 +33,8 @@ class ToolEntry:
     is_async: bool = False
     # 工具返回结果超过此长度时截断，防止 token 溢出
     max_result_size_chars: int = 100_000
+    # 工具分组：core（永远加载）| dev | agent | ...
+    group: str = "core"
 
 
 class ToolRegistry:
@@ -53,6 +55,7 @@ class ToolRegistry:
         check_fn: Optional[Callable[[], bool]] = None,
         is_async: bool = False,
         max_result_size_chars: int = 100_000,
+        group: str = "core",
     ):
         with self._lock:
             self._entries[name] = ToolEntry(
@@ -63,6 +66,7 @@ class ToolRegistry:
                 check_fn=check_fn,
                 is_async=is_async,
                 max_result_size_chars=max_result_size_chars,
+                group=group,
             )
             self._generation += 1
 
@@ -127,6 +131,13 @@ class ToolRegistry:
         elapsed = int((time.time() - t0) * 1000)
         logger.info("tool=%s status=ok duration_ms=%d", name, elapsed)
         return result
+
+    def get_schema(self, name: str) -> dict | None:
+        """返回单个工具的 schema 定义。"""
+        entry = self._entries.get(name)
+        if entry is None:
+            return None
+        return entry.schema
 
     # ── toolset 查询 ──
 

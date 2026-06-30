@@ -29,7 +29,6 @@ from plugins.mcp import MCPManager
 from session.db import SessionDB
 import tool.builtins  # noqa: F401 — 导入即注册所有工具
 from tool.registry import registry
-from tool.toolsets import CORE_ALWAYS_ON, resolve_multiple_toolsets
 
 
 def _wire_tools(agent):
@@ -45,6 +44,9 @@ def _wire_tools(agent):
 
     from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
     wire_todo_store(TodoStore())
+
+    from tool.builtins.deferred_tools import wire_agent as wire_deferred_agent
+    wire_deferred_agent(agent)
 
     return agent_registry
 
@@ -105,9 +107,7 @@ def run(args: object) -> None:
         gateway=recorder,
     )
     agent.registry = registry
-    toolset_names = [n.strip() for n in args.toolset.split(",")]
-    agent.permanent_toolsets = list(toolset_names)
-    agent.tool_names = (CORE_ALWAYS_ON | set(resolve_multiple_toolsets(toolset_names))) & registry.tool_names
+    agent._resolve_tool_names()
 
     context_files = search_context_files()
     if context_files:
