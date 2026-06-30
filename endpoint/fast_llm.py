@@ -15,40 +15,27 @@ import urllib.request
 
 logger = logging.getLogger("chips.endpoint.fast_llm")
 
-_CLASSIFY_PROMPT = """你是一个消息分类器。分析用户消息，输出 JSON。
+_CLASSIFY_PROMPT = """你是一个消息分类器。分析用户消息，输出候选意图。
 
 返回格式：
-{
-    "intent": "intent 名",
-    "predicted_tools": ["工具名", ...],
-    "confidence": "high/low"
-}
+{"candidates": [{"intent": "意图名", "predicted_tools": ["工具"], "score": 0-100}]}
 
-intent 列表：
-- greeting: 问候、打招呼（你好/hi/hello/早上好）
-- simple_qa: 简单知识问答（不需要搜索就知道的常识）
-- web_search: 需要搜索网页（查天气、查资料、搜信息）
-- simple_coding: 简单编码（写脚本、改配置、调命令）
-- complex: 复杂任务（多步骤、分析、调研、项目管理）
-- delegate: 需要委派子 Agent（调查文件、多任务并行）
+intent 可选：
+- greeting: 问候打招呼
+- simple_qa: 简单常识
+- web_search: 需搜索网页
+- simple_coding: 简单编码
+- complex: 复杂分析
+- delegate: 需子 Agent
 - other: 以上都不属于
 
-predicted_tools：从以下列表中选择可能需要的工具
-- web：需要搜索互联网
-- bash：需要执行命令
-- file：需要读/写/搜索文件
-- orchestrate：需要委派子 Agent 或编排多任务
-- sub_agent：需要查询子 Agent 记录
+predicted_tools 可选：web, bash, file, orchestrate, sub_agent
 
 示例：
-  你好                       → {"intent": "greeting", "predicted_tools": [], "confidence": "high"}
-  法国的首都是哪里             → {"intent": "simple_qa", "predicted_tools": [], "confidence": "high"}
-  今天天气怎么样               → {"intent": "web_search", "predicted_tools": ["web"], "confidence": "high"}
-  帮我写个Python脚本算数据      → {"intent": "simple_coding", "predicted_tools": ["bash", "file"], "confidence": "high"}
-  调查项目目录下所有文件         → {"intent": "delegate", "predicted_tools": ["orchestrate"], "confidence": "high"}
-  用Rust重构整个后端服务         → {"intent": "complex", "predicted_tools": ["bash", "file"], "confidence": "medium"}
+  你好 → {"candidates": [{"intent": "greeting", "predicted_tools": [], "score": 95}, {"intent": "other", "predicted_tools": [], "score": 5}]}
+  今天天气 → {"candidates": [{"intent": "web_search", "predicted_tools": ["web"], "score": 90}, {"intent": "simple_qa", "predicted_tools": [], "score": 10}]}
 
-只输出 JSON，不要其他内容。"""
+只输出 JSON。"""
 
 
 class FastLLM:
@@ -83,8 +70,9 @@ class FastLLM:
         self._available = None
 
     def classify(self, user_message: str) -> dict:
-        """分类用户消息，返回 {intent, predicted_tools, confidence}。
+        """分类用户消息，返回 {intent, predicted_tools, candidates, confidence}。
 
+        intent 为候选列表中分数最高的合法标签。
         失败时安全降级返回 other。
         """
         payload = json.dumps({
@@ -116,16 +104,28 @@ class FastLLM:
             if content.startswith("```"):
                 lines = content.split("\n")
                 content = "\n".join(lines[1:-1]) if len(lines) > 2 else lines[-1]
-            result = json.loads(content)
-            intent = result.get("intent", "other")
-            tools = result.get("predicted_tools", [])
-            confidence = result.get("confidence", "low")
-            logger.info("fast_llm_classify intent=%s tools=%s confidence=%s",
-                        intent, tools, confidence)
-            return {"intent": intent, "predicted_tools": tools, "confidence": confidence}
+            parsed = json.loads(content)
+            candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+            validated = []
+            from agent.intent_config import INTENT_ROUTES
+            valid_labels = set(INTENT_ROUTES.keys())
+            for c in candidates:
+                if isinstance(c, dict) and c.get("intent") in valid_labels:
+                    validated.append(c)
+            validated.sort(key=lambda x: x.get("score", 0), reverse=True)
+            best = validated[0] if validated else {"intent": "other", "predicted_tools": [], "score": 0}
+            logger.info("fast_llm_classify intent=%s tools=%s score=%s candidates=%d",
+                        best["intent"], best.get("predicted_tools", []),
+                        best.get("score"), len(validated))
+            return {
+                "intent": best["intent"],
+                "predicted_tools": best.get("predicted_tools", []),
+                "candidates": validated,
+                "confidence": "high" if validated else "low",
+            }
         except Exception as exc:
             logger.warning("fast_llm_classify_failed: %s", exc)
-            return {"intent": "other", "predicted_tools": [], "confidence": "low"}
+            return {"intent": "other", "predicted_tools": [], "candidates": [], "confidence": "low"}
 
     # ── Trace 分析（保留，不变） ──
 
