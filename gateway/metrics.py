@@ -84,6 +84,20 @@ agent_concurrent = Gauge(
     ["agent_name"],
 )
 
+# ── 路由层 ──
+
+routing_decisions_total = Counter(
+    "chips_routing_decisions_total",
+    "Routing decisions by channel",
+    ["channel", "intent"],
+)
+
+guard_blocks_total = Counter(
+    "chips_guard_blocks_total",
+    "Guard blocked requests by rule",
+    ["rule"],
+)
+
 # ── 系统 ──
 
 session_active = Gauge(

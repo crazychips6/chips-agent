@@ -33,19 +33,25 @@ INTENT_ROUTES: RouteConfig = {
 }
 
 
-def classify_route(intent: str, predicted_tools: list[str]) -> str:
+def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:
     """根据 intent 和 predicted_tools 决定走哪个通道。
 
     Returns:
-        "small" — 走小模型通道
-        "large" — 走大模型通道
+        (channel, reason) — ("small"/"large", 决策原因)
     """
     # 黑名单检查：如果预测的工具包含复杂工具 → 走大模型
     if any(t in COMPLEX_TOOL_TRIGGERS for t in predicted_tools):
-        return "large"
+        return ("large", f"complex_tool:{','.join(COMPLEX_TOOL_TRIGGERS & set(predicted_tools))}")
 
     route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
-    return route["model"]  # type: ignore[return-value]
+    channel = route["model"]  # type: ignore[return-value]
+    if channel == "small" and route.get("reply"):
+        reason = f"intent:{intent}/direct"
+    elif channel == "small":
+        reason = f"intent:{intent}/tools:{route.get('tools', 'none')}"
+    else:
+        reason = f"intent:{intent}/default"
+    return (channel, reason)  # type: ignore[return-value]
 
 
 def get_route_config(intent: str) -> dict:

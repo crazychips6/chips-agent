@@ -380,7 +380,13 @@ class AIAgent:
         if self._guard_engine is not None:
             decision = self._guard_engine.evaluate(user_message)
             if decision.is_block():
-                logger.info("guard_blocked reason=%s rule=%s", decision.reason, decision.matched_rule)
+                logger.info("ROUTE msg=%s guard=block rule=%s reason=%s",
+                             user_message[:30], decision.matched_rule, decision.reason)
+                try:
+                    from gateway.metrics import guard_blocks_total
+                    guard_blocks_total.labels(rule=decision.matched_rule or "unknown").inc()
+                except Exception:
+                    pass
                 return f"⛔ 操作已被拦截\n\n原因：{decision.reason}"
 
         # ── Layer 2: 意图分类 + 路由决策 ──
@@ -388,8 +394,11 @@ class AIAgent:
         intent = self._routing.get("intent", "other")
 
         # 预激活 predicted_tools
-        for tool in self._routing.get("predicted_tools", []):
+        predicted = self._routing.get("predicted_tools", [])
+        for tool in predicted:
             self.activate_deferred_tool(tool)
+        if predicted:
+            logger.info("TOOL_PREACTIVATE tools=%s", predicted)
 
         # 白名单小模型直接回复（无工具）
         from agent.intent_config import should_reply_direct
@@ -407,19 +416,34 @@ class AIAgent:
         else:
             result = {"intent": "other", "predicted_tools": [], "confidence": "low"}
 
-        # 检查黑名单：如果 predicted_tools 含复杂工具 → 强制走大模型
+        # 检查黑名单 + 获取决策原因
         from agent.intent_config import classify_route
-        channel = classify_route(result["intent"], result.get("predicted_tools", []))
+        channel, reason = classify_route(result["intent"], result.get("predicted_tools", []))
 
         # 小模型通道带工具 → 设置模型覆盖
         if channel == "small" and result.get("predicted_tools"):
             if self._fast_llm is not None:
                 result["_model_override"] = self._fast_llm.MODEL
-                logger.info("small_channel_model_override model=%s", self._fast_llm.MODEL)
 
         result["channel"] = channel
-        logger.info("intent_route intent=%s tools=%s channel=%s",
-                     result["intent"], result.get("predicted_tools"), channel)
+        result["route_reason"] = reason
+
+        # 路由决策追踪日志
+        scores = [c.get("score") for c in result.get("candidates", [])]
+        logger.info("ROUTE msg=%s guard=pass classify=intent:%s(%s)/tools:%s "
+                     "channel=%s reason=%s",
+                     user_message[:30], result["intent"],
+                     scores[0] if scores else "?",
+                     result.get("predicted_tools", []),
+                     channel, reason)
+
+        # 路由指标
+        try:
+            from gateway.metrics import routing_decisions_total
+            routing_decisions_total.labels(channel=channel, intent=result["intent"]).inc()
+        except Exception:
+            pass
+
         return result
 
     def _route_small_direct(self, user_message: str, intent: str) -> str | None:
