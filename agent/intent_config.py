@@ -14,6 +14,9 @@ from typing import Literal
 
 RouteConfig = dict[str, dict[str, object]]
 
+# 全局开关：设为 False 关闭小模型直接回答
+ENABLE_SMALL_DIRECT = True
+
 # 黑名单工具：如果 predicted_tools 包含这些 → 强制走大模型
 COMPLEX_TOOL_TRIGGERS = {"orchestrate", "sub_agent"}
 
@@ -22,9 +25,9 @@ INTENT_ROUTES: RouteConfig = {
     # 小模型通道（通过 Ollama provider 执行完整 ReAct）
     "greeting": {"model": "small", "tools": []},
     "simple_qa": {"model": "small", "tools": []},
-    # 小模型通道 — 帯工具
-    "web_search": {"model": "small", "tools": ["web"]},
-    "simple_coding": {"model": "small", "tools": ["bash", "file"]},
+    # 大模型通道（涉及工具的都走大模型）
+    "web_search": {"model": "large", "tools": "all"},
+    "simple_coding": {"model": "large", "tools": "all"},
     # 大模型通道
     "complex": {"model": "large", "tools": "all"},
     "delegate": {"model": "large", "tools": "all"},
@@ -44,6 +47,10 @@ def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:
     Returns:
         (channel, reason) — ("small"/"large", 决策原因)
     """
+    # 全局开关
+    if not ENABLE_SMALL_DIRECT:
+        return ("large", "global_disabled")
+
     # 黑名单检查：如果预测的工具包含复杂工具 → 走大模型
     if any(t in COMPLEX_TOOL_TRIGGERS for t in predicted_tools):
         return ("large", f"complex_tool:{','.join(COMPLEX_TOOL_TRIGGERS & set(predicted_tools))}")
