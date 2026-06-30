@@ -554,13 +554,14 @@ class AIAgent:
         if reply is not None:
             return reply
 
-        # 阶段二：对话准备（system prompt + memory 预热）
-        system = self._prepare_conversation(user_message)
-
-        # 阶段三：意图分类 + 工具预激活
+        # 阶段二：意图分类 + 工具预激活（在 _prepare_conversation 之前，
+        # 让小模型通道能拿到 _routing 做精简 prompt）
         self._routing = self._classify_intent(user_message)
         for tool in self._routing.get("predicted_tools", []):
             self.activate_deferred_tool(tool)
+
+        # 阶段三：对话准备（system prompt + memory 预热）
+        system = self._prepare_conversation(user_message)
 
         # 阶段四：ReAct 循环（所有模型共享同一套 system prompt）
         rounds = [] if self.debug_context else None
