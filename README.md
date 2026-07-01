@@ -1,6 +1,6 @@
-<p align="center">
-  <img src="assets/banner.svg" alt="chips-agent">
-</p>
+<h1 align="center">chips-agent</h1>
+
+<p align="center"><em>通用 AI Agent 框架 · 从零搭建 · TUI / Web 双界面</em></p>
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Python-3.12+-blue?logo=python&logoColor=white" alt="Python"></a>
