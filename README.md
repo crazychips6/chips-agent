@@ -1,11 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="120" alt="chips-agent logo">
-</p>
-
-<h1 align="center">chips-agent</h1>
-
-<p align="center">
-  <em>通用 AI Agent 框架 · 从零搭建 · TUI / Web 双界面</em>
+  <img src="assets/banner.svg" alt="chips-agent">
 </p>
 
 <p align="center">
@@ -15,10 +9,6 @@
   <a href="#"><img src="https://img.shields.io/badge/UI-TUI%20%7C%20Web-purple" alt="UI"></a>
   <a href="#"><img src="https://img.shields.io/badge/Storage-SQLite%20FTS5-003B57?logo=sqlite" alt="SQLite"></a>
 </p>
-[![License](https://img.shields.io/badge/License-MIT-green)]()
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek%7COpenAI%7COllama-orange)]()
-[![TUI](https://img.shields.io/badge/UI-TUI%20%7C%20Web-purple)]()
-[![SQLite](https://img.shields.io/badge/Storage-SQLite%20FTS5-003B57?logo=sqlite)]()
 
 chips-agent 是一个从零到一独立设计的通用 AI Agent 框架。具备完整的工具系统、上下文管理、端侧+云端分级处理、Multi-Agent 编排与可观测性能力。
 

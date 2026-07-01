@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 芯片（左侧） -->
+  <rect x="40" y="40" width="120" height="120" rx="20" fill="url(#g)" opacity="0.12"/>
+  <rect x="50" y="50" width="100" height="100" rx="14" fill="none" stroke="url(#g)" stroke-width="2.5"/>
+
+  <!-- C 形电路 -->
+  <path d="M70 80 H95 A15 15 0 0 1 110 95 V105 A15 15 0 0 1 95 120 H70"
+        fill="none" stroke="url(#g)" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 信号点 -->
+  <circle cx="70" cy="80" r="3" fill="#06b6d4"/>
+  <circle cx="70" cy="120" r="3" fill="#06b6d4"/>
+
+  <!-- 引脚 -->
+  <line x1="50" y1="80" x2="30" y2="80" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="100" x2="30" y2="100" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="120" x2="30" y2="120" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="150" y1="80" x2="170" y2="80" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="150" y1="100" x2="170" y2="100" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="150" y1="120" x2="170" y2="120" stroke="url(#g)" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- 标题 -->
+  <text x="210" y="95" font-family="'SF Mono', 'JetBrains Mono', monospace" font-size="48" font-weight="700" fill="url(#g)" letter-spacing="4">chips</text>
+
+  <!-- 描述 -->
+  <text x="210" y="135" font-family="'SF Mono', 'JetBrains Mono', monospace" font-size="18" fill="#64748b" letter-spacing="1">通用 AI Agent 框架</text>
+</svg>
