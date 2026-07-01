@@ -1,42 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a1a2e"/>
-      <stop offset="100%" style="stop-color:#16213e"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00d2ff"/>
-      <stop offset="100%" style="stop-color:#00ff88"/>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
     </linearGradient>
   </defs>
 
-  <!-- 背景圆 -->
-  <circle cx="200" cy="200" r="190" fill="url(#bg)" stroke="url(#accent)" stroke-width="3"/>
+  <!-- 芯片 -->
+  <rect x="110" y="110" width="180" height="180" rx="28" fill="url(#g)" opacity="0.12"/>
+  <rect x="125" y="125" width="150" height="150" rx="20" fill="none" stroke="url(#g)" stroke-width="3"/>
 
-  <!-- 芯片主体 -->
-  <rect x="130" y="140" width="140" height="140" rx="12" fill="none" stroke="#00d2ff" stroke-width="3"/>
-  <rect x="150" y="160" width="100" height="100" rx="8" fill="none" stroke="#00ff88" stroke-width="2" opacity="0.6"/>
+  <!-- C 形电路 -->
+  <path d="M155 170 H195 A25 25 0 0 1 220 195 V205 A25 25 0 0 1 195 230 H155"
+        fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round"/>
 
-  <!-- 芯片引脚 -->
-  <line x1="130" y1="170" x2="105" y2="170" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="130" y1="200" x2="105" y2="200" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="130" y1="230" x2="105" y2="230" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="270" y1="170" x2="295" y2="170" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="270" y1="200" x2="295" y2="200" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="270" y1="230" x2="295" y2="230" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="170" y1="280" x2="170" y2="305" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="200" y1="280" x2="200" y2="305" stroke="#00d2ff" stroke-width="3"/>
-  <line x1="230" y1="280" x2="230" y2="305" stroke="#00d2ff" stroke-width="3"/>
+  <!-- 信号点 -->
+  <circle cx="155" cy="170" r="4" fill="#06b6d4"/>
+  <circle cx="155" cy="230" r="4" fill="#06b6d4"/>
 
-  <!-- 内部 AI 节点 -->
-  <circle cx="200" cy="210" r="25" fill="none" stroke="#00ff88" stroke-width="2.5"/>
-  <text x="200" y="216" text-anchor="middle" fill="#00ff88" font-family="monospace" font-size="20" font-weight="bold">AI</text>
+  <!-- 引脚 -->
+  <line x1="125" y1="175" x2="95" y2="175" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="125" y1="200" x2="95" y2="200" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="125" y1="225" x2="95" y2="225" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="275" y1="175" x2="305" y2="175" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="275" y1="200" x2="305" y2="200" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="275" y1="225" x2="305" y2="225" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
 
-  <!-- 连接线 -->
-  <line x1="175" y1="210" x2="155" y2="210" stroke="#00ff88" stroke-width="1.5" opacity="0.5"/>
-  <line x1="225" y1="210" x2="245" y2="210" stroke="#00ff88" stroke-width="1.5" opacity="0.5"/>
-  <line x1="200" y1="185" x2="200" y2="165" stroke="#00ff88" stroke-width="1.5" opacity="0.5"/>
-
-  <!-- 文字 chips -->
-  <text x="200" y="350" text-anchor="middle" fill="url(#accent)" font-family="monospace" font-size="36" font-weight="bold" letter-spacing="6">chips</text>
+  <!-- 底部引脚 -->
+  <line x1="175" y1="275" x2="175" y2="305" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="200" y1="275" x2="200" y2="305" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="225" y1="275" x2="225" y2="305" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round"/>
 </svg>
