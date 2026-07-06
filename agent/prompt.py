@@ -293,6 +293,19 @@ class PromptBuilder:
 
         return self._assemble_and_truncate(layers)
 
+    def build_minimal(self, *, goal: str = "") -> str:
+        """最小 prompt —— 用于子 Agent，只包含目标和基本行为约束。
+
+        不继承主 Agent 的完整身份、不加载记忆快照、不注入技能索引。
+        """
+        parts = [
+            "你是 chips 的子 Agent，执行分配给你的子任务。",
+            "完成任务后直接输出结果，不要向主 Agent 提问或请求澄清。",
+        ]
+        if goal:
+            parts.append(f"\n## 目标\n{goal}")
+        return "\n\n".join(parts)
+
     def build_dynamic(
         self,
         *,

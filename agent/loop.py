@@ -64,6 +64,8 @@ class AIAgent:
         self.stream = stream
         self._max_retries = max_retries
         self.prompt_builder = PromptBuilder(verbose=verbose)
+        # 子 Agent 目标（不为空时表示当前 Agent 是子 Agent，使用最小 prompt）
+        self.goal: str = ""
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
@@ -225,8 +227,15 @@ class AIAgent:
     # ── 冷冻缓存 ──
 
     def _ensure_cache(self):
-        """构建冷冻 system prompt 缓存（仅首次执行）。"""
+        """构建冷冻 system prompt 缓存（仅首次执行）。
+
+        子 Agent（self.goal 不为空）使用最小 prompt，
+        只包含目标和基本行为约束，不继承主 Agent 的完整 identity。
+        """
         if self._frozen_base is not None:
+            return
+        if self.goal:
+            self._frozen_base = self.prompt_builder.build_minimal(goal=self.goal)
             return
         snapshot = self.memory_manager.snapshot()
         self._frozen_base = self.prompt_builder.build_frozen(
