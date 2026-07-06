@@ -121,12 +121,14 @@ class AIAgent:
 
     # ── 降级状态重置 ──
 
-    def _reset_fallback_session(self):
+    def _reset_fallback_session(self, is_top_level: bool = False):
         """重置 FallbackGateway 的会话级降级状态。
 
-        新一轮对话开始时调用，让之前失败的模型有机会重新尝试。
-        gateway 链为 UsageRecorder(FallbackGateway(...)) 或直接 FallbackGateway。
+        只在顶层用户对话开始时重置（is_top_level=True），
+        子 Agent 不重置，避免重复重试已失败的主模型。
         """
+        if not is_top_level:
+            return
         gw = self.gateway
         # 穿透 UsageRecorder 装饰器
         if hasattr(gw, '_inner'):
@@ -623,7 +625,7 @@ class AIAgent:
         self._agent_callback = agent_callback
         self.turn_count += 1
         # 新一轮对话，重置模型降级状态（让主用模型有机会重新尝试）
-        self._reset_fallback_session()
+        self._reset_fallback_session(agent_callback is not None)
         # 活跃会话数 +1
         try:
             from gateway.metrics import session_active
