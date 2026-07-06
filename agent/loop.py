@@ -118,6 +118,24 @@ class AIAgent:
         """清除中断请求。"""
         self._interrupt_requested.clear()
 
+    # ── 降级状态重置 ──
+
+    def _reset_fallback_session(self):
+        """重置 FallbackGateway 的会话级降级状态。
+
+        新一轮对话开始时调用，让之前失败的模型有机会重新尝试。
+        gateway 链为 UsageRecorder(FallbackGateway(...)) 或直接 FallbackGateway。
+        """
+        gw = self.gateway
+        # 穿透 UsageRecorder 装饰器
+        if hasattr(gw, '_inner'):
+            gw = gw._inner
+        if hasattr(gw, 'reset_session'):
+            try:
+                gw.reset_session()
+            except Exception:
+                pass
+
     # ── 消息构建 ──
 
     def _build_assistant_msg(self, msg) -> dict:
@@ -573,6 +591,8 @@ class AIAgent:
 
     def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
         self.turn_count += 1
+        # 新一轮对话，重置模型降级状态（让主用模型有机会重新尝试）
+        self._reset_fallback_session()
         # 活跃会话数 +1
         try:
             from gateway.metrics import session_active

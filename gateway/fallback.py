@@ -68,6 +68,16 @@ class FallbackGateway(ModelGateway):
             raise ValueError("至少需要提供一个后端模型")
         self._backends = backends
         self._last_failures: dict[str, dict[str, Any]] = {}
+        # 本轮/本会话中已确认不可用的模型，不再重试
+        self._session_dead: set[str] = set()
+
+    def reset_session(self):
+        """重置会话级状态（在 run_conversation 开始时调用）。
+
+        清除失败记录和降级标记，让模型降级链重新完整尝试。
+        """
+        self._session_dead.clear()
+        self._last_failures.clear()
 
     @property
     def backend_count(self) -> int:
@@ -105,6 +115,9 @@ class FallbackGateway(ModelGateway):
         errors: list[tuple[str, str, str]] = []  # (model, err_type, err_msg)
 
         for idx, (m, gw) in enumerate(self._backends):
+            # 跳过本次对话中已确认不可用的模型
+            if m in self._session_dead:
+                continue
             # 如果调用方指定了 model 且当前 backends 只有 1 个 →
             # 用调用方指定的 model（兼容 loop.py 传入自定义模型）
             actual_model = m if len(self._backends) > 1 else (model or m)
@@ -121,13 +134,16 @@ class FallbackGateway(ModelGateway):
                     )
                 # 成功后清除该后端的失败记录
                 self._last_failures.pop(actual_model, None)
-                # 如果有降级历史，打印恢复提示
+                # 如果有降级历史，标记失败的后端为 dead，并打印恢复提示
                 if errors:
+                    for fm, _, _ in errors:
+                        self._session_dead.add(fm)
                     import sys
-                    print(f"\n  ✅ 模型恢复: {actual_model}（之前 {len(errors)} 个后端不可用）", file=sys.stderr)
+                    print(f"\n  ✅ 模型恢复: {actual_model}"
+                          f"（已禁用 {', '.join(f[0] for f in errors)}）", file=sys.stderr)
                     logger.info(
-                        "fallback_recovered model=%s after %d failures",
-                        actual_model, len(errors),
+                        "fallback_recovered model=%s disabled=%s",
+                        actual_model, [f[0] for f in errors],
                     )
                 return result
 
