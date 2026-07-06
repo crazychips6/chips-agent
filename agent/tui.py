@@ -286,6 +286,23 @@ class TUI:
             sys.stdout.write(chunk)
             sys.stdout.flush()
 
+        def _on_agent(agent_name: str, task: str, result: str | None, record_id: str | None):
+            """子 Agent 生命周期回调。"""
+            _AGENT_COLOR = "\033[1;38;2;150;200;255m"  # 淡蓝色
+            if result is None:
+                # 子 Agent 开始执行
+                task_preview = task[:80] + "..." if len(task) > 80 else task
+                sys.stdout.write("\n")
+                sys.stdout.write(f"  {_AGENT_COLOR}👤 {agent_name}: {task_preview}{_RST}\n")
+                sys.stdout.flush()
+            else:
+                # 子 Agent 完成
+                summary = result[:120] + "..." if len(result) > 120 else result
+                sys.stdout.write(f"  {_AGENT_COLOR}  ✅ {agent_name} 完成{_RST}\n")
+                if summary:
+                    sys.stdout.write(f"  {_DIM}  │ {summary}{_RST}\n")
+                sys.stdout.flush()
+
         def _on_tool(name: str, args: dict, result: str | None):
             # ── clarify 工具：不走 FocusTracker（由 ChoicePicker 管理） ──
             if name == "clarify":
@@ -342,6 +359,7 @@ class TUI:
                 text, max_iterations=max_iterations,
                 chunk_callback=_on_chunk,
                 tool_callback=_on_tool,
+                agent_callback=_on_agent,
             )
         finally:
             sys.stdout.write("\n")

@@ -332,14 +332,16 @@ ORCHESTRATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "orchestrate",
-        "description": "委派任务给一个或多个 Agent 执行",
+        "description": "将复杂任务拆为子任务并行/串行执行，比逐个手动调用快 3-5 倍。"
+                       "适用场景：同时查资料+写代码、操作多个独立模块、多角色协作。"
+                       "不适合：单步操作（查天气、读文件等）、前后依赖强的步骤",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
                     "enum": ["single", "supervisor", "pipeline", "decompose", "debate"],
-                    "description": "single=单步, supervisor=多步, decompose=自动分解, pipeline=链式, debate=对比",
+                    "description": "single=单步委派 / supervisor=多步串行 / decompose=自动分解并行 / pipeline=链式传递 / debate=多角度对比",
                 },
                 "agent": {
                     "type": "string",

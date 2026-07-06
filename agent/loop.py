@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 
 # 移除 surrogate 字符（如 DeepSeek reasoning_content 中可能出现的 \udce4），
 # 防止后续请求序列化时 UnicodeEncodeError: surrogates not allowed
@@ -319,7 +320,10 @@ class AIAgent:
         tools: list[str] | None = None,
         max_iterations: int = 10,
         context: str = "",
+        _agent_callback: Callable | None = None,
     ) -> str:
+        if _agent_callback is None:
+            _agent_callback = getattr(self, '_agent_callback', None)
         """创建并同步执行一个子 Agent，返回 record id。
 
         子 Agent 共享父 Agent 的 gateway / registry / memory_manager，
@@ -340,6 +344,10 @@ class AIAgent:
         record_id = self._sub_agent_manager.create_with_ttl(agent_name, task, ttl=300)
         self._sub_agent_manager.update(record_id, status="running")  # str → AgentStatus 自动转换
 
+        # TUI 回调：子 Agent 开始
+        if _agent_callback:
+            _agent_callback(agent_name, task, None, record_id)
+
         try:
             from tool.builtins.agent_tools import build_sub_agent
 
@@ -357,6 +365,11 @@ class AIAgent:
 
             output = sub.run_conversation(final_task, max_iterations=max_iterations)
             self._sub_agent_manager.capture_result(record_id, sub.messages, output)
+            # TUI 回调：子 Agent 完成
+            if _agent_callback:
+                record = self._sub_agent_manager.get(record_id)
+                summary = (output or "")[:200]
+                _agent_callback(agent_name, task, summary, record_id)
             logger.info(
                 "fork_sub_agent done id=%s name=%s iter=%d tools=%d",
                 record_id, agent_name,
@@ -524,6 +537,17 @@ class AIAgent:
             deferred_block = self._build_deferred_block()
             if deferred_block:
                 system += "\n\n" + deferred_block
+        # 复杂任务提示：检测到多步骤/多文件/多角色任务时，提醒 LLM 考虑 orchestrate
+        if not is_small and self._routing.get("intent") in ("complex", "delegate", "simple_coding"):
+            system += (
+                "\n\n<complex-task-hint>\n"
+                "当前任务看起来需要多个步骤。如果涉及以下情况，请使用 orchestrate 工具：\n"
+                "  - 需要同时查资料和写代码\n"
+                "  - 需要操作多个独立文件或模块\n"
+                "  - 可以用多个角色并行工作（研究员查资料 + 程序员实现）\n"
+                "  - 需要先调研再做决策\n"
+                "</complex-task-hint>"
+            )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)
@@ -594,7 +618,9 @@ class AIAgent:
 
     # ── 主循环 ──
 
-    def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
+    def run_conversation(self, user_message: str, max_iterations: int = 20, *,
+                         chunk_callback=None, tool_callback=None, agent_callback=None) -> str:
+        self._agent_callback = agent_callback
         self.turn_count += 1
         # 新一轮对话，重置模型降级状态（让主用模型有机会重新尝试）
         self._reset_fallback_session()
