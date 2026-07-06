@@ -164,8 +164,8 @@ def _call_with_retry(fn, max_retries: int, desc: str = "LLM 调用") -> Any:
     for attempt in range(1, max_retries + 1):
         try:
             return fn()
-        except openai.BadRequestError as e:
-            raise RuntimeError(f"请求参数错误（不重试）：{e}")
+        except openai.BadRequestError:
+            raise  # 参数错误，保留原始异常类型供上级判断
         except openai.RateLimitError:
             last_error = "API 速率限制"
             if attempt < max_retries:
@@ -180,7 +180,7 @@ def _call_with_retry(fn, max_retries: int, desc: str = "LLM 调用") -> Any:
                     _log_retry(attempt, max_retries, last_error, delay)
                     time.sleep(delay)
             else:
-                raise RuntimeError(f"API 错误 (HTTP {e.status_code}，不重试)：{e}")
+                raise  # 保留原始异常（401/403 等），让 FallbackGateway 判断是否降级
         except openai.APITimeoutError:
             last_error = "请求超时"
             if attempt < max_retries:
@@ -193,8 +193,6 @@ def _call_with_retry(fn, max_retries: int, desc: str = "LLM 调用") -> Any:
                 delay = jittered_backoff(attempt, base_delay=2.0)
                 _log_retry(attempt, max_retries, last_error, delay)
                 time.sleep(delay)
-        except openai.BadRequestError as e:
-            raise RuntimeError(f"请求参数错误（不重试）：{e}")
         except Exception as e:
             last_error = f"未知错误：{e}"
             if attempt < max_retries:
