@@ -412,6 +412,9 @@ class AIAgent:
         if self._fast_llm is not None and self._fast_llm.is_available():
             result = self._fast_llm.classify(user_message)
         else:
+            if self._fast_llm is not None:
+                import sys
+                print("\n  ⚡ 端侧模型（Ollama）不可用，小模型直答已跳过", file=sys.stderr)
             result = {"intent": "other", "predicted_tools": [], "confidence": "low"}
 
         # 检查黑名单 + 获取决策原因
@@ -477,6 +480,8 @@ class AIAgent:
                 logger.info("small_direct_reply reply=%s", reply[:60])
                 return reply
         except Exception as exc:
+            import sys
+            print(f"\n  ⚡ 小模型直答失败（{exc}），切到大模型", file=sys.stderr)
             logger.warning("small_direct_failed: %s", exc)
             return None
         return None

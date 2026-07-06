@@ -222,7 +222,8 @@ class TUI:
     def startup(self, *, model: str, tool_count: int, toolset_names: list[str],
                 memory_status: str = "off", mcp_status: str = "off",
                 skill_status: str = "off", compress_status: str = "on",
-                context_file_count: int = 0) -> None:
+                context_file_count: int = 0,
+                fast_llm_status: str = "off") -> None:
         _banner = [
             "╔═╗ ╦ ╦ ╦ ╔═╗ ╔═╗ ",
             " ║   ╠═╣ ║ ╠═╣ ╚═╗",
@@ -251,6 +252,8 @@ class TUI:
             parts.append(f"Skills: {skill_status}")
         if compress_status != "off":
             parts.append(f"Compress: {compress_status}")
+        if fast_llm_status != "off":
+            parts.append(f"Fast: {fast_llm_status}")
         if context_file_count:
             parts.append(f"Files: {context_file_count}")
         if parts:

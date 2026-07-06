@@ -245,6 +245,7 @@ def run(args: object) -> None:
     mcp_status = f"{len(mcp_loaded)} servers ({mcp_mgr.tool_count} tools)" if mcp_loaded else "off"
     skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
     compress_status = "off" if args.no_compress else "on"
+    fast_llm_status = "on" if (agent._fast_llm and agent._fast_llm.is_available()) else "off"
 
     # 降级链信息
     _fb_count = len(_backends) - 1 if len(_backends) > 1 else 0
@@ -261,6 +262,7 @@ def run(args: object) -> None:
         skill_status=skill_status,
         compress_status=compress_status,
         context_file_count=len(agent.context_files),
+        fast_llm_status=fast_llm_status,
     )
 
     # ── 单条消息模式 ──
