@@ -37,6 +37,7 @@ class SessionDB:
                     id          TEXT PRIMARY KEY,
                     title       TEXT DEFAULT '',
                     system_prompt TEXT DEFAULT '',
+                    parent_session_id TEXT REFERENCES sessions(id),
                     created_at  REAL NOT NULL,
                     updated_at  REAL NOT NULL
                 );
@@ -132,14 +133,22 @@ class SessionDB:
 
     # ── Session CRUD ──
 
-    def create_session(self, title: str = "", system_prompt: str = "") -> str:
-        """创建新会话，返回 session_id。"""
+    def create_session(self, title: str = "", system_prompt: str = "",
+                       parent_session_id: str | None = None) -> str:
+        """创建新会话，返回 session_id。
+
+        Args:
+            title: 会话标题
+            system_prompt: 使用的 system prompt
+            parent_session_id: 父会话 ID（子 Agent 创建会话时关联主会话）
+        """
         now = time.time()
         session_id = self._generate_id(now)
         with self._lock, self._connect() as conn:
             conn.execute(
-                "INSERT INTO sessions (id, title, system_prompt, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (session_id, title, system_prompt, now, now),
+                "INSERT INTO sessions (id, title, system_prompt, parent_session_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, title, system_prompt, parent_session_id, now, now),
             )
         return session_id
 

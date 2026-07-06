@@ -341,7 +341,12 @@ ORCHESTRATE_SCHEMA = {
                 "mode": {
                     "type": "string",
                     "enum": ["single", "supervisor", "pipeline", "decompose", "debate"],
-                    "description": "single=单步委派 / supervisor=多步串行 / decompose=自动分解并行 / pipeline=链式传递 / debate=多角度对比",
+                    "description": "选择模式："
+                        "single=简单委派（适合单步任务，如"查一下天气"）；"
+                        "supervisor=串行多步（适合步骤明确的任务，如"先调研再写代码"）；"
+                        "decompose=自动拆维度并行（适合多维度分析、对比、调研类问题，如"比较 A 和 B 的区别"）；"
+                        "pipeline=链式传递（适合上一步结果直接作为下一步输入）；"
+                        "debate=多角色独立回答后对比（只适合有争议性话题，不适合概念解释和确定性问题）",
                 },
                 "agent": {
                     "type": "string",
