@@ -194,10 +194,13 @@ def _run_debate(args: dict, parent) -> str:
 
     # 如果提供了 perspectives 且长度匹配 → 每个 Agent 拿自己的立场
     # 否则所有 Agent 使用同一个 task
+    # debate 使用 5 轮限制：辩论侧重观点质量而非深度搜索
     if perspectives and len(perspectives) == len(agents):
-        steps = [{"agent": a, "task": p} for a, p in zip(agents, perspectives)]
+        steps = [{"agent": a, "task": p, "max_iterations": 5}
+                 for a, p in zip(agents, perspectives)]
     else:
-        steps = [{"agent": a, "task": task} for a in agents]
+        steps = [{"agent": a, "task": task, "max_iterations": 5}
+                 for a in agents]
     results = _run_parallel(steps, parent, tag_prefix="debate")
 
     return json.dumps({
@@ -352,7 +355,7 @@ ORCHESTRATE_SCHEMA = {
                         "supervisor=串行多步（适合步骤明确的任务）；"
                         "decompose=自动拆维度并行（适合多维度分析、对比、调研）；"
                         "pipeline=链式传递（适合上一步结果直接作为下一步输入）；"
-                        "debate=多角色独立回答后对比（仅限有争议性话题，需通过 perspectives 给各方分配不同立场）"
+                        "debate=多角色独立回答后对比（仅限有争议性话题，需通过 perspectives 给各方分配不同立场，各 Agent 限 5 轮）"
                     ),
                 },
                 "agent": {
