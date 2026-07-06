@@ -36,6 +36,10 @@ def _build_parser():
     parser.add_argument("--resume", nargs="?", const=True, default=False,
                         help="恢复上次会话，或指定 session_id 恢复特定会话")
     parser.add_argument("--no-stream", action="store_true", help="禁用 streaming 输出")
+    parser.add_argument("--fallback-model", default=os.getenv("CHIPS_FALLBACK_MODEL"),
+                        help="备用模型名（主用不可用时自动切换）")
+    parser.add_argument("--fallback-base-url", default=os.getenv("CHIPS_FALLBACK_BASE_URL"),
+                        help="备用模型的 API 地址")
     parser.add_argument("--env", default="local", choices=["local", "docker"],
                         help="执行环境: local（本地）或 docker（容器沙盒）")
     parser.add_argument("--docker-image", default="alpine:latest",
@@ -108,7 +112,6 @@ def _build_parser():
 
 def main():
     load_dotenv()
-    ConfigStore().apply_to_env()
 
     parser = _build_parser()
     args = parser.parse_args()
@@ -141,11 +144,12 @@ def main():
         print("chips 0.3.0")
         return
 
-    # 前置检查
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        print("错误: 未设置 DEEPSEEK_API_KEY")
-        print("请在 .env 文件中配置: DEEPSEEK_API_KEY=sk-...")
+    # 前置检查（环境变量或 config.yaml 至少有一个 key 可用）
+    _has_key = bool(os.getenv("DEEPSEEK_API_KEY") or ConfigStore().get("api_key"))
+    if not _has_key:
+        print("错误: 未设置 API Key")
+        print("请在 ~/.chips/config.yaml 中配置: api_key: sk-xxx")
+        print("或设置环境变量: DEEPSEEK_API_KEY=sk-xxx")
         return
 
     # ── 组装 + 启动（所有接线逻辑在 agent/boot.py） ──

@@ -149,8 +149,6 @@ def get_agent():
         if not api_key:
             raise RuntimeError("DEEPSEEK_API_KEY not set")
 
-        ConfigStore().apply_to_env()
-
         raw_gateway = OpenAIProvider(api_key=api_key, base_url=os.getenv("CHIPS_BASE_URL", "https://api.deepseek.com"))
         recorder = UsageRecorder(
             raw_gateway,

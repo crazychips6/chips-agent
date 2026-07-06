@@ -95,12 +95,48 @@ def run(args: object) -> None:
         args: argparse 解析后的命名空间（由 cli.py 传入）
     """
     # ── 1. 核心基础设施 ──
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    raw_gateway = OpenAIProvider(api_key=api_key, base_url=args.base_url)
-    recorder = UsageRecorder(raw_gateway, pricing=ConfigStore().read_pricing())
+    pricing = ConfigStore().read_pricing()
+
+    # ── 模型后端（主用 + 备用） ──
+    _backends = ConfigStore().read_model_backends()
+    # 命令行 --fallback-model 追加一个备用模型
+    fb_model = getattr(args, "fallback_model", None)
+    if fb_model:
+        fb_key = os.getenv("CHIPS_FALLBACK_API_KEY") or _backends[0].get("api_key", "")
+        fb_base = getattr(args, "fallback_base_url", "") or ""
+        _backends = [b for b in _backends if b["model"] != fb_model]
+        _backends.append({
+            "model": fb_model, "base_url": fb_base, "api_key": fb_key or "",
+        })
+
+    # 构建 Gateway 链
+    if len(_backends) > 1:
+        from gateway.fallback import FallbackGateway
+        chain: list[ModelGateway] = []
+        for b in _backends:
+            chain.append(OpenAIProvider(
+                api_key=b.get("api_key", ""),
+                base_url=b.get("base_url", ""),
+            ))
+        _models = [b["model"] for b in _backends]
+        fallback_gw = FallbackGateway(list(zip(_models, chain)))
+        recorder = UsageRecorder(fallback_gw, pricing=pricing)
+        get_logger().info(
+            "fallback_gateway_enabled primary=%s fallbacks=%s",
+            _models[0], _models[1:],
+        )
+        _active_model = _backends[0]["model"]
+    else:
+        b0 = _backends[0]
+        raw_gateway = OpenAIProvider(
+            api_key=b0.get("api_key", ""),
+            base_url=b0.get("base_url", ""),
+        )
+        recorder = UsageRecorder(raw_gateway, pricing=pricing)
+        _active_model = b0["model"]
 
     agent = AIAgent(
-        model=args.model,
+        model=_active_model,
         debug_context=args.debug_context,
         verbose=args.verbose,
         stream=not args.no_stream,
@@ -210,8 +246,14 @@ def run(args: object) -> None:
     skill_status = f"{skill_mgr.count} skills" if skill_mgr.count else "off"
     compress_status = "off" if args.no_compress else "on"
 
+    # 降级链信息
+    _fb_count = len(_backends) - 1 if len(_backends) > 1 else 0
+    _model_display = agent.model
+    if _fb_count:
+        _model_display += f" + {_fb_count} backup"
+
     tui.startup(
-        model=args.model,
+        model=_model_display,
         tool_count=len(agent.tool_names),
         toolset_names=toolset_names,
         memory_status=mem_status,

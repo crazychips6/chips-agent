@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from config.store import ConfigStore, KNOWN_KEYS
+from config.store import ConfigStore
 
 
 @pytest.fixture
@@ -57,25 +57,31 @@ class TestConfigStore:
             data = yaml.safe_load(f)
         assert data == {"model": "deepseek-chat"}
 
-    def test_apply_to_env(self, tmp_config, monkeypatch):
+    def test_get_effective_env_overrides_yaml(self, tmp_config, monkeypatch):
+        """环境变量 > config.yaml。"""
         store = ConfigStore(tmp_config)
-        store.set("model", "test-model")
+        store.set("model", "from-yaml")
+        monkeypatch.setenv("CHIPS_MODEL", "from-env")
+        assert store.get_effective("model", "CHIPS_MODEL") == "from-env"
+
+    def test_get_effective_yaml_fallback(self, tmp_config, monkeypatch):
+        """config.yaml 在无环境变量时生效。"""
+        store = ConfigStore(tmp_config)
+        store.set("model", "from-yaml")
         monkeypatch.delenv("CHIPS_MODEL", raising=False)
-        store.apply_to_env()
-        assert os.environ["CHIPS_MODEL"] == "test-model"
+        assert store.get_effective("model", "CHIPS_MODEL") == "from-yaml"
 
-    def test_apply_to_env_does_not_override(self, tmp_config, monkeypatch):
+    def test_get_effective_default(self, tmp_config, monkeypatch):
+        """无环境变量无 yaml 时返回默认值。"""
         store = ConfigStore(tmp_config)
-        store.set("model", "test-model")
-        monkeypatch.setenv("CHIPS_MODEL", "existing")
-        store.apply_to_env()
-        assert os.environ["CHIPS_MODEL"] == "existing"
+        monkeypatch.delenv("CHIPS_MODEL", raising=False)
+        assert store.get_effective("model", "CHIPS_MODEL", "deepseek-chat") == "deepseek-chat"
 
-    def test_known_keys_structure(self):
-        assert "model" in KNOWN_KEYS
-        assert "base_url" in KNOWN_KEYS
-        assert KNOWN_KEYS["model"] == "CHIPS_MODEL"
-        assert KNOWN_KEYS["base_url"] == "CHIPS_BASE_URL"
+    def test_get_effective_no_env_name(self, tmp_config, monkeypatch):
+        """不传 env_name 时只查 yaml。"""
+        store = ConfigStore(tmp_config)
+        store.set("key", "val")
+        assert store.get_effective("key") == "val"
 
     def test_read_pricing_none(self, tmp_config):
         """没有配置 pricing 时返回 None。"""
@@ -91,6 +97,94 @@ class TestConfigStore:
         pricing = store.read_pricing()
         assert pricing is not None
         assert pricing["deepseek-chat"]["input"] == 0.001
+
+    def test_read_model_backends_primary(self, tmp_config, monkeypatch):
+        """主用模型从 model/base_url 读取，API Key 从环境变量。"""
+        cfg = {"model": "deepseek-chat", "base_url": "https://api.deepseek.com"}
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert len(backends) >= 1
+        assert backends[0]["model"] == "deepseek-chat"
+        assert backends[0]["api_key"] == "sk-test"
+
+    def test_read_primary_inline_key(self, tmp_config):
+        """主模型 api_key 直接填值。"""
+        cfg = {"model": "gpt-4o", "api_key": "sk-inline"}
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert backends[0]["api_key"] == "sk-inline"
+
+    def test_read_primary_key_env(self, tmp_config, monkeypatch):
+        """主模型 api_key_env 引用环境变量。"""
+        cfg = {"model": "claude-sonnet", "api_key_env": "ANTHROPIC_API_KEY"}
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert backends[0]["api_key"] == "sk-ant-test"
+
+    def test_read_fallback_backends_env(self, tmp_config, monkeypatch):
+        """备用模型通过 api_key_env 引用环境变量。"""
+        cfg = {
+            "fallback_models": [
+                {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY"},
+            ]
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert len(backends) == 2
+        assert backends[1]["api_key"] == "sk-openai-test"
+
+    def test_read_fallback_backends_inline(self, tmp_config):
+        """备用模型 api_key 直接填值。"""
+        cfg = {
+            "fallback_models": [
+                {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1", "api_key": "sk-inline"},
+            ]
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert len(backends) == 2
+        assert backends[1]["api_key"] == "sk-inline"
+
+    def test_read_fallback_backends_inline_overrides_env(self, tmp_config, monkeypatch):
+        """api_key 直接值优先于 api_key_env。"""
+        cfg = {
+            "fallback_models": [
+                {"model": "gpt-4o-mini", "api_key": "sk-inline", "api_key_env": "SHOULD_NOT_READ"},
+            ]
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setenv("SHOULD_NOT_READ", "sk-from-env")
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert backends[1]["api_key"] == "sk-inline"
+
+    def test_read_fallback_skipped_no_key(self, tmp_config, monkeypatch):
+        """api_key_env 指向的环境变量不存在时跳过该备用模型。"""
+        cfg = {
+            "fallback_models": [
+                {"model": "gpt-4o-mini", "api_key_env": "MISSING_VAR"},
+            ]
+        }
+        with open(tmp_config, "w") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        store = ConfigStore(tmp_config)
+        backends = store.read_model_backends()
+        assert len(backends) == 1  # 只有主用
 
 
 class TestConfigCli:
