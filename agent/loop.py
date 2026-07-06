@@ -235,7 +235,10 @@ class AIAgent:
         if self._frozen_base is not None:
             return
         if self.goal:
-            self._frozen_base = self.prompt_builder.build_minimal(goal=self.goal)
+            mi = getattr(self, '_build_minimal_max_iter', 10)
+            self._frozen_base = self.prompt_builder.build_minimal(
+                goal=self.goal, max_iterations=mi,
+            )
             return
         snapshot = self.memory_manager.snapshot()
         self._frozen_base = self.prompt_builder.build_frozen(
@@ -664,6 +667,9 @@ class AIAgent:
                 return reply
 
         # 阶段四：对话准备（system prompt + memory 预热）
+        # 保存本轮 max_iterations，供 _ensure_cache 构建子 Agent prompt 用
+        if self.goal:
+            self._build_minimal_max_iter = max_iterations
         system = self._prepare_conversation(user_message)
 
         # 阶段五：ReAct 循环
@@ -910,9 +916,14 @@ class AIAgent:
                 if last_text_reply:
                     return f"{last_text_reply}\n\n---\n⚠ 对话已被中断"
                 return "⚠ 对话已被中断"
+            term_msg = (
+                f"⛔ 已被强制终止：达到最大执行轮数（{max_iterations} 轮）。"
+                if self.goal else
+                f"已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
+            )
             if last_text_reply:
-                return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
-            return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
+                return f"{last_text_reply}\n\n---\n{term_msg}"
+            return term_msg
         finally:
             try:
                 from gateway.metrics import session_active

@@ -293,14 +293,22 @@ class PromptBuilder:
 
         return self._assemble_and_truncate(layers)
 
-    def build_minimal(self, *, goal: str = "") -> str:
+    def build_minimal(self, *, goal: str = "", max_iterations: int = 10) -> str:
         """最小 prompt —— 用于子 Agent，只包含目标和基本行为约束。
 
         不继承主 Agent 的完整身份、不加载记忆快照、不注入技能索引。
+
+        Args:
+            goal: 子任务目标
+            max_iterations: 最大执行轮数，子 Agent 会据此规划执行策略
         """
         parts = [
             "你是 chips 的子 Agent，执行分配给你的子任务。",
-            "完成任务后直接输出结果，不要向主 Agent 提问或请求澄清。",
+            f"## 执行约束",
+            f"- 你最多有 {max_iterations} 轮执行机会（每次工具调用或回复算一轮）",
+            f"- 请合理规划：先用最少步骤获取关键信息，再做判断",
+            f"- 如果 {max_iterations} 轮内无法完成，先给出已有结果再说明未完成的部分",
+            "- 完成任务后直接输出结果，不要向主 Agent 提问或请求澄清。",
         ]
         if goal:
             parts.append(f"\n## 目标\n{goal}")
