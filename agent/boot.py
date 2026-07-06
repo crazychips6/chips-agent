@@ -283,6 +283,14 @@ def run(args: object) -> None:
         nonlocal _last_sigint
         now = time.time()
         if now - _last_sigint < 2.0:
+            # 强制退出前保存 checkpoint
+            try:
+                if hasattr(agent, '_save_pending'):
+                    agent._save_pending()
+                if hasattr(agent, '_save_checkpoint') and hasattr(agent, 'turn_count'):
+                    agent._save_checkpoint(getattr(agent, '_saved_count', 0))
+            except Exception:
+                pass
             print("\n[强制退出]")
             sys.exit(1)
         _last_sigint = now
@@ -353,6 +361,10 @@ def _restore_or_create_session(agent: AIAgent, args: object) -> None:
                 agent.messages = session_db.get_history(session_id)
                 agent._saved_count = len(agent.messages)
                 print(f"已恢复会话 {session_id}（{len(agent.messages)} 条消息）")
+                # 检测 checkpoint
+                cp = AIAgent.check_checkpoint()
+                if cp and cp.get("session_id") == session_id:
+                    print(f"  ⚠ 检测到未完成的任务（已完成 {cp.get('iteration', '?')} 轮）")
     if not agent.session_id:
         agent.session_id = session_db.create_session()
 

@@ -883,6 +883,7 @@ class AIAgent:
                         # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
                         self._maybe_inject_image(tool_result)
                     self._save_pending()
+                    self._save_checkpoint(iteration)
                     # 中断检查 ③：工具执行批后，在此轮结束前检查
                     if self._is_interrupted():
                         logger.info("interrupt_requested after_tools iteration=%d", iteration)
@@ -903,7 +904,9 @@ class AIAgent:
                             content = result.content
                     self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
+                    self._save_checkpoint(iteration)
                     last_text_reply = content
+                    self._clear_checkpoint()
                     if content:
                         if self.stream:
                             return ""  # 已由 chat_stream 的 on_chunk 实时输出
@@ -936,6 +939,59 @@ class AIAgent:
             self._analyze_and_learn(user_message, last_text_reply)
             if self.plugin_manager:
                 self.plugin_manager.dispatch_session_end(self.messages)
+
+    # ── Checkpoint ──
+
+    @property
+    def _checkpoint_file(self) -> str:
+        return os.path.join(os.path.dirname(self.session_db._path) if self.session_db else ".chips",
+                           "checkpoint.json")
+
+    def _save_checkpoint(self, iteration: int):
+        """每轮 ReAct 迭代结束后保存 checkpoint。
+
+        保存当前迭代进度到文件，进程崩溃后可通过 --resume 恢复。
+        """
+        if not self.session_id:
+            return
+        try:
+            cp = {
+                "session_id": self.session_id,
+                "turn_count": self.turn_count,
+                "iteration": iteration + 1,  # 已完成 iteration+1 轮
+                "message_count": len(self.messages),
+                "timestamp": time.time(),
+            }
+            path = self._checkpoint_file
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(cp, f)
+        except Exception:
+            logger.debug("checkpoint_save_failed", exc_info=True)
+
+    def _clear_checkpoint(self):
+        """正常完成时清除 checkpoint。"""
+        try:
+            path = self._checkpoint_file
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    @staticmethod
+    def check_checkpoint(db_path: str = ".chips/sessions.db") -> dict | None:
+        """检测是否有未完成的 checkpoint，供 boot.py 在 --resume 时使用。"""
+        cp_path = os.path.join(os.path.dirname(db_path), "checkpoint.json")
+        if not os.path.isfile(cp_path):
+            return None
+        try:
+            with open(cp_path) as f:
+                cp = json.load(f)
+            if not isinstance(cp, dict) or "session_id" not in cp:
+                return None
+            return cp
+        except Exception:
+            return None
 
     def shutdown(self):
         """释放资源：关闭 MCP 连接、清理线程和所有记忆提供者。"""
