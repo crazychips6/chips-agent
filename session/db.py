@@ -145,6 +145,14 @@ class SessionDB:
         now = time.time()
         session_id = self._generate_id(now)
         with self._lock, self._connect() as conn:
+            # 旧库可能没有 parent_session_id 列，自动 ADD COLUMN 兼容
+            try:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN parent_session_id "
+                    "TEXT REFERENCES sessions(id)"
+                )
+            except Exception:
+                pass
             conn.execute(
                 "INSERT INTO sessions (id, title, system_prompt, parent_session_id, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
