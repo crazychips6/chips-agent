@@ -1,4 +1,4 @@
-"""chips Web 服务器 — FastAPI + SSE 流式聊天"""
+"""chips Web 服务器 — FastAPI + Redis 会话管理"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread
 from typing import AsyncGenerator
+from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
@@ -18,6 +19,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 from pydantic import BaseModel
+import redis
 
 logger = logging.getLogger("chips.web")
 
@@ -26,19 +28,19 @@ logger = logging.getLogger("chips.web")
 HERE = Path(__file__).parent
 STATIC_DIR = HERE / "static"
 
-# JWT 密钥：优先从环境变量读取，否则生成随机密钥（重启后 token 失效）
+# JWT 密钥
 _SECRET_KEY_ENV = os.getenv("CHIPS_WEB_SECRET")
 if _SECRET_KEY_ENV:
     SECRET_KEY = _SECRET_KEY_ENV
 else:
     import secrets
     SECRET_KEY = secrets.token_hex(32)
-    logger.warning("CHIPS_WEB_SECRET 未设置，使用随机密钥（服务重启后已签发的 token 将失效）")
+    logger.warning("CHIPS_WEB_SECRET 未设置，使用随机密钥")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
-# 登录凭据：必须通过环境变量显式设置，无默认值
+# 登录凭据
 SIMPLE_USER = os.getenv("CHIPS_WEB_USER")
 SIMPLE_PASS = os.getenv("CHIPS_WEB_PASS")
 if not SIMPLE_USER or not SIMPLE_PASS:
@@ -46,12 +48,17 @@ if not SIMPLE_USER or not SIMPLE_PASS:
         "必须设置 CHIPS_WEB_USER 和 CHIPS_WEB_PASS 环境变量才能启动 Web 服务"
     )
 
+# Redis 配置
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+
 # ── 模型 ──
 
 
 class ChatRequest(BaseModel):
-    message: str
     session_id: str | None = None
+    message: str
     reset: bool = False
 
 
@@ -85,8 +92,7 @@ def verify_token(token: str) -> str | None:
 
 app = FastAPI(title="chips Web", version="0.1.0")
 
-# CORS：默认关闭跨域（前端同源无需 CORS），通过 CHIPS_WEB_CORS_ORIGINS 开启
-# 多个 origin 用逗号分隔：http://localhost:3000,https://example.com
+# CORS
 _CORS_ORIGINS = os.getenv("CHIPS_WEB_CORS_ORIGINS", "")
 CORS_ORIGINS = [o.strip() for o in _CORS_ORIGINS.split(",") if o.strip()]
 if CORS_ORIGINS:
@@ -109,7 +115,6 @@ def get_current_user(request: Request) -> str:
     return user
 
 
-# 可选认证：没有 token 时也允许访问（方便开发）
 def optional_user(request: Request) -> str | None:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
@@ -123,7 +128,6 @@ _agent = None
 
 
 def _get_agent_or_none():
-    """返回 _agent 但不初始化（用于 health/metrics 只读访问）。"""
     return _agent
 
 
@@ -185,7 +189,7 @@ def get_agent():
             agent.tool_names |= set(mcp_mgr.get_all_tool_names())
             agent._extra_tool_names |= set(mcp_mgr.get_all_tool_names())
 
-        # ── TodoStore（模块级，供 todo 工具使用） ──
+        # TodoStore
         from tool.builtins.todo_tool import TodoStore, wire_store as wire_todo_store
         wire_todo_store(TodoStore())
 
@@ -205,14 +209,6 @@ def get_agent():
         wire_plugin_manager(plugin_mgr)
 
         _agent = agent
-        # 初始化部署状态指标
-        try:
-            from gateway.metrics import set_deployment_healthy
-            set_deployment_healthy("gateway")
-            set_deployment_healthy("session_db")
-            set_deployment_healthy("memory")
-        except Exception:
-            pass
         logger.info("agent_initialized")
     return _agent
 
@@ -234,12 +230,121 @@ async def shutdown():
         _agent = None
 
 
+# ── 会话管理（支持 Redis 降级到内存） ──
+
+
+class SessionManager:
+    """会话管理器 — 支持 Redis 降级到内存。"""
+    
+    def __init__(self, redis_client: redis.Redis | None = None):
+        self.redis = redis_client
+        self._memory_sessions: dict[str, dict] = {}  # 内存降级存储
+        self._use_redis = self._check_redis()
+    
+    def _check_redis(self) -> bool:
+        """检查 Redis 是否可用。"""
+        if self.redis is None:
+            return False
+        try:
+            self.redis.ping()
+            logger.info("redis_connected")
+            return True
+        except Exception as e:
+            logger.warning("redis_unavailable, using_memory_storage: %s", e)
+            return False
+    
+    def create_session(self) -> str:
+        """创建新会话。"""
+        session_id = str(uuid4())
+        
+        if self._use_redis:
+            try:
+                self.redis.hset(f"session:{session_id}", mapping={
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "message_count": "0",
+                })
+                return session_id
+            except Exception as e:
+                logger.warning("redis_create_session_failed: %s", e)
+                self._use_redis = False
+        
+        # 内存降级
+        self._memory_sessions[session_id] = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "message_count": 0,
+            "history": [],
+        }
+        return session_id
+    
+    def add_message(self, session_id: str, role: str, content: str):
+        """添加消息到会话。"""
+        message = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        
+        if self._use_redis:
+            try:
+                self.redis.rpush(f"session:{session_id}:history", json.dumps(message))
+                self.redis.hincrby(f"session:{session_id}", "message_count", 1)
+                return
+            except Exception as e:
+                logger.warning("redis_add_message_failed: %s", e)
+                self._use_redis = False
+        
+        # 内存降级
+        if session_id not in self._memory_sessions:
+            self._memory_sessions[session_id] = {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "message_count": 0,
+                "history": [],
+            }
+        self._memory_sessions[session_id]["history"].append(message)
+        self._memory_sessions[session_id]["message_count"] += 1
+    
+    def get_history(self, session_id: str) -> list[dict]:
+        """获取会话历史。"""
+        if self._use_redis:
+            try:
+                history = self.redis.lrange(f"session:{session_id}:history", 0, -1)
+                return [json.loads(m) for m in history]
+            except Exception as e:
+                logger.warning("redis_get_history_failed: %s", e)
+                self._use_redis = False
+        
+        # 内存降级
+        session = self._memory_sessions.get(session_id, {})
+        return session.get("history", [])
+    
+    def session_exists(self, session_id: str) -> bool:
+        """检查会话是否存在。"""
+        if self._use_redis:
+            try:
+                return self.redis.exists(f"session:{session_id}") > 0
+            except Exception as e:
+                logger.warning("redis_session_exists_failed: %s", e)
+                self._use_redis = False
+        
+        # 内存降级
+        return session_id in self._memory_sessions
+    
+    @property
+    def storage_type(self) -> str:
+        """返回当前存储类型。"""
+        return "redis" if self._use_redis else "memory"
+
+
+# 初始化会话管理器
+session_manager = SessionManager(redis_client)
+
+
 # ── 路由 ──
 
 
 @app.get("/metrics")
 async def metrics_prometheus():
-    """Prometheus 标准格式指标端点，供 Prometheus server 抓取。"""
+    """Prometheus 格式指标。"""
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     return PlainTextResponse(
         content=generate_latest(),
@@ -249,158 +354,64 @@ async def metrics_prometheus():
 
 @app.get("/api/health")
 async def health():
-    """健康检查：返回各子系统状态。"""
+    """健康检查。"""
     status = {"status": "ok", "subsystems": {}}
-
+    
     # Agent 状态
     agent = _get_agent_or_none()
     if agent is None:
         status["subsystems"]["agent"] = "not_initialized"
     else:
-        agent_ok = True
-        agent_info = {
+        status["subsystems"]["agent"] = {
             "model": agent.model,
             "tools": len(agent.tool_names),
             "session_id": agent.session_id,
             "messages": len(agent.messages),
         }
-        status["subsystems"]["agent"] = agent_info
-
-    # Memory 状态
-    if agent and agent.memory_manager:
-        providers = [p.name for p in agent.memory_manager.providers]
-        status["subsystems"]["memory"] = {
-            "providers": providers,
-            "active": len(providers),
-        }
-        try:
-            from gateway.metrics import set_deployment_healthy, set_deployment_degraded
-            set_deployment_healthy("memory")
-        except Exception:
-            pass
+    
+    # 存储状态
+    status["subsystems"]["storage"] = {
+        "type": session_manager.storage_type,
+        "sessions": len(session_manager._memory_sessions) if session_manager.storage_type == "memory" else "N/A",
+    }
+    
+    # Redis 状态
+    if session_manager._use_redis:
+        status["subsystems"]["redis"] = "connected"
     else:
-        status["subsystems"]["memory"] = "disabled"
-        try:
-            from gateway.metrics import set_deployment_down
-            set_deployment_down("memory")
-        except Exception:
-            pass
-
-    # Session DB 状态
-    if agent and agent.session_db:
-        try:
-            count = agent.session_db.summary_stats().get("total_sessions", -1)
-            status["subsystems"]["session_db"] = {"sessions": count, "status": "ok"}
-            try:
-                from gateway.metrics import set_deployment_healthy
-                set_deployment_healthy("session_db")
-            except Exception:
-                pass
-        except Exception as e:
-            status["subsystems"]["session_db"] = {"status": "error", "detail": str(e)}
-            try:
-                from gateway.metrics import set_deployment_degraded
-                set_deployment_degraded("session_db")
-            except Exception:
-                pass
-    else:
-        status["subsystems"]["session_db"] = "disabled"
-
-    # 网关 / API 状态
-    if agent and hasattr(agent, "gateway"):
-        gateway = getattr(agent, "gateway", None)
-        inner = getattr(gateway, "_inner", None)
-        provider = type(inner).__name__ if inner else "unknown"
-        status["subsystems"]["gateway"] = {"provider": provider, "status": "ok"}
-
+        status["subsystems"]["redis"] = "disconnected (using memory)"
+    
     return status
 
 
-@app.get("/api/metrics")
-async def metrics():
-    """返回 Prometheus 风格的聚合指标。"""
-    agent = _get_agent_or_none()
-    if agent is None:
-        return {"status": "not_initialized"}
-
-    gateway = getattr(agent, "gateway", None)
-    if gateway is None or not hasattr(gateway, "get_metrics"):
-        return {"status": "unavailable", "reason": "gateway not instrumented"}
-
-    result = gateway.get_metrics()
-    result["status"] = "ok"
-    return result
+@app.post("/api/sessions")
+async def create_session(user: str | None = Depends(optional_user)):
+    """创建新会话。"""
+    session_id = session_manager.create_session()
+    return {"session_id": session_id}
 
 
-@app.get("/api/insights/cost-by-model")
-async def insights_cost_by_model(days: int = Query(7, ge=1, le=365)):
-    """按模型汇总费用。"""
-    from agent.insights import InsightsEngine
-    agent = _get_agent_or_none()
-    if agent is None or not agent.session_db:
-        raise HTTPException(status_code=503, detail="agent not initialized")
-    engine = InsightsEngine(agent.session_db)
-    return {"insights": engine.cost_by_model(days=days).dict()}
-
-
-@app.get("/api/insights/daily-cost")
-async def insights_daily_cost(days: int = Query(30, ge=1, le=365)):
-    """每日费用趋势。"""
-    from agent.insights import InsightsEngine
-    agent = _get_agent_or_none()
-    if agent is None or not agent.session_db:
-        raise HTTPException(status_code=503, detail="agent not initialized")
-    engine = InsightsEngine(agent.session_db)
-    return {"insights": engine.daily_cost_trend(days=days).dict()}
-
-
-@app.get("/api/insights/tool-usage")
-async def insights_tool_usage(days: int = Query(7, ge=1, le=365)):
-    """工具使用统计。"""
-    from agent.insights import InsightsEngine
-    agent = _get_agent_or_none()
-    if agent is None or not agent.session_db:
-        raise HTTPException(status_code=503, detail="agent not initialized")
-    engine = InsightsEngine(agent.session_db)
-    return {"insights": engine.tool_usage(days=days).dict()}
-
-
-@app.get("/api/insights/session/{session_id}")
-async def insights_session(session_id: str):
-    """单会话完整画像。"""
-    from agent.insights import InsightsEngine
-    agent = _get_agent_or_none()
-    if agent is None or not agent.session_db:
-        raise HTTPException(status_code=503, detail="agent not initialized")
-    engine = InsightsEngine(agent.session_db)
-    result = engine.session_portrait(session_id)
-    data = result.dict()
-    if not data:
-        raise HTTPException(status_code=404, detail="session not found")
-    return {"insights": data}
-
-
-@app.get("/api/insights/weekly-report")
-async def insights_weekly():
-    """一键周报。"""
-    from agent.insights import InsightsEngine
-    agent = _get_agent_or_none()
-    if agent is None or not agent.session_db:
-        raise HTTPException(status_code=503, detail="agent not initialized")
-    engine = InsightsEngine(agent.session_db)
-    return {"insights": engine.weekly_report().dict()}
-
-
-@app.post("/api/login", response_model=TokenResponse)
-async def login(body: LoginRequest):
-    if body.username == SIMPLE_USER and body.password == SIMPLE_PASS:
-        return TokenResponse(access_token=create_token(body.username))
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+@app.get("/api/sessions/{session_id}/history")
+async def get_session_history(session_id: str, user: str | None = Depends(optional_user)):
+    """获取会话历史。"""
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    history = session_manager.get_history(session_id)
+    return {"messages": history}
 
 
 @app.post("/api/chat")
 async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
+    """流式聊天。"""
     agent = get_agent()
+    
+    # 确保有 session_id
+    session_id = body.session_id or str(uuid4())
+    
+    # 添加用户消息到 Redis
+    session_manager.add_message(session_id, "user", body.message)
+    
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     def on_chunk(text: str):
@@ -427,11 +438,18 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
     Thread(target=run, daemon=True).start()
 
     async def generate() -> AsyncGenerator[str, None]:
+        full_response = ""
         while True:
             chunk = await queue.get()
             if chunk is None:
                 break
+            full_response += chunk
             yield f"data: {json.dumps({'token': chunk})}\n\n"
+        
+        # 添加助手消息到 Redis
+        session_manager.add_message(session_id, "assistant", full_response)
+        
+        yield f"data: {json.dumps({'session_id': session_id})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -439,8 +457,15 @@ async def chat(body: ChatRequest, user: str | None = Depends(optional_user)):
 
 @app.post("/api/chat/sync")
 async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)):
-    """非流式接口，适合测试。"""
+    """非流式聊天。"""
     agent = get_agent()
+    
+    # 确保有 session_id
+    session_id = body.session_id or str(uuid4())
+    
+    # 添加用户消息到 Redis
+    session_manager.add_message(session_id, "user", body.message)
+    
     if body.reset:
         agent.messages.clear()
         agent._saved_count = 0
@@ -451,10 +476,16 @@ async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)
         gateway = getattr(agent, "gateway", None)
         if gateway and hasattr(gateway, "reset"):
             gateway.reset()
+    
     chunks: list[str] = []
     agent.run_conversation(body.message, chunk_callback=lambda c: chunks.append(c))
-    return {"reply": "".join(chunks)}
-
+    
+    reply = "".join(chunks)
+    
+    # 添加助手消息到 Redis
+    session_manager.add_message(session_id, "assistant", reply)
+    
+    return {"reply": reply, "session_id": session_id}
 
 
 # ── 静态文件 ──

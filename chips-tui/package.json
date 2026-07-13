@@ -1,0 +1,21 @@
+{
+  "name": "chips-tui",
+  "version": "1.0.0",
+  "description": "chips-agent TUI (based on Mimo-code)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@opentui/core": "latest",
+    "@opentui/solid": "latest",
+    "solid-js": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "tsx": "latest",
+    "@types/node": "latest"
+  }
+}

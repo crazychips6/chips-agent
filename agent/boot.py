@@ -9,15 +9,11 @@
 from __future__ import annotations
 
 import os
-import signal
-import sys
-import time
 
 from agent.logger import setup_logging, get_logger
 from agent.loop import AIAgent
 from agent.prompt import search_context_files
-from agent.repl import ReplLoop, CommandRegistry, StdioOutputBackend
-from agent.repl_prompt_toolkit import PromptToolkitInputBackend
+from agent.repl import CommandRegistry
 from config.agent_config import AgentRegistry
 from config.store import ConfigStore
 from gateway.providers.openai import OpenAIProvider
@@ -219,12 +215,9 @@ def run(args: object) -> None:
     # 启动子 Agent 超时清理线程
     agent._sub_agent_manager.start_cleaner()
 
-    # ── 7. 日志 + TUI + 技能系统 ──
+    # ── 7. 日志 + 技能系统 ──
     setup_logging(session_id=agent.session_id)
     get_logger().info("session started")
-
-    from agent.tui import TUI
-    tui = TUI()
 
     from agent.skill import SkillManager
     from tool.builtins.skill_tools import wire_skill_manager, wire_plugin_manager
@@ -237,7 +230,7 @@ def run(args: object) -> None:
     # ── 8. 斜杠命令注册 ──
     cmd_reg = _register_slash_commands(agent, agent_registry)
 
-    # ── 9. 启动画面 ──
+    # ── 9. 启动信息 ──
     mem_status = "off"
     if agent.memory_manager.providers:
         provider_names = [p.name for p in agent.memory_manager.providers]
@@ -252,56 +245,53 @@ def run(args: object) -> None:
     if _fb_count:
         _model_display += f" + {_fb_count} backup"
 
-    tui.startup(
-        model=_model_display,
-        tool_count=len(agent.tool_names),
-        toolset_names=toolset_names,
-        memory_status=mem_status,
-        mcp_status=mcp_status,
-        skill_status=skill_status,
-        compress_status=compress_status,
-        context_file_count=len(agent.context_files),
-    )
+    startup_info = {
+        "model": _model_display,
+        "tool_count": len(agent.tool_names),
+        "toolset_names": toolset_names,
+        "memory_status": mem_status,
+        "mcp_status": mcp_status,
+        "skill_status": skill_status,
+        "compress_status": compress_status,
+        "context_file_count": len(agent.context_files),
+    }
 
-    # ── 单条消息模式 ──
+    # ── 10. 启动 TUI ──
+    from agent.tui import ChipsApp
+
+    # 单条消息模式
     if args.message:
-        tui.chat(agent, args.message)
+        import asyncio
+        from agent.tui.worker import AgentWorker
+
+        async def _run_single():
+            worker = AgentWorker(agent)
+            reply = await worker.run(
+                args.message,
+                on_chunk=lambda c: print(c, end="", flush=True),
+                on_tool=lambda n, a, r: None,
+            )
+            if reply:
+                print(reply)
+
+        asyncio.run(_run_single())
         stats = recorder.format_summary()
         if stats:
             print(f"\n{stats}")
+        agent.shutdown()
         return
 
-    print("输入 /help 查看命令, /exit 退出")
-    print()
-
-    # ── 10. SIGINT 处理器 ──
-    _last_sigint = 0.0
-
-    def _sigint_handler(signum, frame):
-        nonlocal _last_sigint
-        now = time.time()
-        if now - _last_sigint < 2.0:
-            print("\n[强制退出]")
-            sys.exit(1)
-        _last_sigint = now
-        agent.interrupt()
-        print("\n[正在中断...]")
-
-    signal.signal(signal.SIGINT, _sigint_handler)
-
-    # ── 11. 启动 ReplLoop ──
-    loop = ReplLoop(
-        agent=agent,
-        input_backend=PromptToolkitInputBackend(commands=cmd_reg.command_names),
-        output_backend=StdioOutputBackend(),
-        cmd_registry=cmd_reg,
-        tui=tui,
-    )
-    loop.run()
-    stats = recorder.format_summary()
-    if stats:
-        print(f"\n{stats}")
-    agent.shutdown()
+    # 交互模式
+    app = ChipsApp(agent, cmd_reg, startup_info)
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stats = recorder.format_summary()
+        if stats:
+            print(f"\n{stats}")
+        agent.shutdown()
 
 
 # ── 辅助函数 ──
