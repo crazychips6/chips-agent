@@ -11,3 +11,14 @@ keywords:
   - debug
   - 修复
   - bug
+# 规则预过滤
+rules:
+  - type: contains
+    values:
+      - 写一个函数
+      - 写个函数
+      - 写一段代码
+      - 写个脚本
+      - 帮我写代码
+      - 修复bug
+      - 修复bug

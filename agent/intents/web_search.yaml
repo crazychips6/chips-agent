@@ -14,3 +14,16 @@ keywords:
   - 查一下
   - 找一下
 time_sensitive: true
+# 规则预过滤
+rules:
+  - type: contains      # 包含匹配
+    values:
+      - 搜索一下
+      - 查一下
+      - 帮我搜
+      - 帮我查
+      - 搜索最新
+      - 最新消息
+      - 今天的
+      - 昨天的
+      - 明天的

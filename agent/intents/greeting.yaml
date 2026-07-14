@@ -11,3 +11,22 @@ keywords:
   - 晚上好
   - 在吗
   - 嗨
+# 规则预过滤（不走 LLM）
+rules:
+  - type: exact        # 精确匹配
+    values:
+      - 你好
+      - 您好
+      - hi
+      - hello
+      - 在吗
+      - 嗨
+  - type: prefix       # 前缀匹配
+    values:
+      - 早上好
+      - 下午好
+      - 晚上好
+      - 你好啊
+      - 您好啊
+  - type: regex        # 正则匹配
+    pattern: "^(hi|hello|hey)[!！.。]?$"

@@ -133,9 +133,30 @@ class FastLLM:
     def classify(self, user_message: str) -> dict:
         """分类用户消息，返回 {intent, predicted_tools, candidates, confidence}。
 
-        intent 为候选列表中分数最高的合法标签。
-        失败时安全降级返回 other。
+        流程：
+        1. 规则预过滤（不走 LLM，高频确定性意图直接返回）
+        2. LLM 分类（规则未命中时调用 Ollama）
         """
+        # ── 阶段一：规则预过滤 ──
+        from agent.rule_matcher import rule_matcher
+        rule_intent = rule_matcher.match(user_message)
+        if rule_intent:
+            from agent.intent_loader import intent_registry
+            intent_def = intent_registry.get(rule_intent)
+            # 从意图配置获取 predicted_tools
+            predicted_tools = []
+            if intent_def and isinstance(intent_def.tools, list):
+                predicted_tools = intent_def.tools
+            logger.info("rule_match intent=%s text=%s", rule_intent, user_message[:30])
+            return {
+                "intent": rule_intent,
+                "predicted_tools": predicted_tools,
+                "candidates": [{"intent": rule_intent, "predicted_tools": predicted_tools, "score": 100}],
+                "confidence": "high",
+                "source": "rule",
+            }
+
+        # ── 阶段二：LLM 分类 ──
         classify_prompt = _get_classify_prompt()
 
         payload = json.dumps({

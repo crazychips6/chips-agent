@@ -29,6 +29,7 @@ class IntentDef:
         self.keywords: list[str] = data.get("keywords", [])
         self.time_sensitive: bool = data.get("time_sensitive", False)
         self.prompt_hint: str = data.get("prompt_hint", "")
+        self.rules: list[dict[str, Any]] = data.get("rules", [])
 
     def to_route(self) -> dict[str, Any]:
         """转为路由表格式。"""

@@ -26,3 +26,16 @@ prompt_hint: |
     - document(action='ocr', path='...') — 图片 OCR
     - document(action='convert', path='...') — PDF 转 Markdown
   不要使用 bash 或其他工具处理文档。
+# 规则预过滤
+rules:
+  - type: regex
+    pattern: "\\.(pdf|docx|doc|txt|eml|msg|png|jpg|jpeg)(\\s|$)"
+  - type: contains
+    values:
+      - 帮我看看这个文档
+      - 解析这个文档
+      - 读取这个文件
+      - 打开这个文件
+      - 提取文本
+      - 识别文字
+      - OCR识别

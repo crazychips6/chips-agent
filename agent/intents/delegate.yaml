@@ -8,3 +8,11 @@ keywords:
   - 并行
   - 多人
   - 团队
+# 规则预过滤
+rules:
+  - type: contains
+    values:
+      - 委派给
+      - 分成多个任务
+      - 并行执行
+      - 同时处理
