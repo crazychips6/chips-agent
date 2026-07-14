@@ -6,13 +6,15 @@
 
 小模型走完整 ReAct（共享同一套 system prompt），
 只是调用不同的模型 API。
+
+配置来源：agent/intents/*.yaml（新增意图只需加 YAML 文件）
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any
 
-RouteConfig = dict[str, dict[str, object]]
+from agent.intent_loader import intent_registry
 
 # 全局开关：设为 False 关闭小模型直接回答
 ENABLE_SMALL_DIRECT = True
@@ -20,25 +22,32 @@ ENABLE_SMALL_DIRECT = True
 # 黑名单工具：如果 predicted_tools 包含这些 → 强制走大模型
 COMPLEX_TOOL_TRIGGERS = {"orchestrate", "sub_agent"}
 
-# 路由表
-INTENT_ROUTES: RouteConfig = {
-    # 小模型通道（通过 Ollama provider 执行完整 ReAct）
-    "greeting": {"model": "small", "tools": []},
-    "simple_qa": {"model": "small", "tools": []},
-    # 大模型通道（涉及工具的都走大模型）
-    "web_search": {"model": "large", "tools": "all"},
-    "simple_coding": {"model": "large", "tools": "all"},
-    # 大模型通道
-    "complex": {"model": "large", "tools": "all"},
-    "delegate": {"model": "large", "tools": "all"},
-    "other": {"model": "large", "tools": "all"},
-}
+
+# ── 兼容旧接口 ──
+
+
+def get_intent_routes() -> dict[str, dict[str, Any]]:
+    """获取路由表（从 YAML 配置加载）。"""
+    return intent_registry.get_route_table()
+
+
+# 保留 INTENT_ROUTES 变量用于兼容（某些代码可能直接引用）
+INTENT_ROUTES: dict[str, dict[str, Any]] = {}
+
+
+def _sync_routes():
+    """同步路由表到模块级变量。"""
+    global INTENT_ROUTES
+    INTENT_ROUTES = intent_registry.get_route_table()
+
+
+# 初始化时同步一次
+_sync_routes()
 
 
 def get_tools_for_intent(intent: str) -> list[str] | str:
     """获取 intent 对应的可见工具列表。"""
-    route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
-    return route["tools"]  # type: ignore[return-value]
+    return intent_registry.get_tools_for_intent(intent)
 
 
 def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:
@@ -55,12 +64,20 @@ def classify_route(intent: str, predicted_tools: list[str]) -> tuple[str, str]:
     if any(t in COMPLEX_TOOL_TRIGGERS for t in predicted_tools):
         return ("large", f"complex_tool:{','.join(COMPLEX_TOOL_TRIGGERS & set(predicted_tools))}")
 
-    route = INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
-    channel = route["model"]  # type: ignore[return-value]
+    intent_def = intent_registry.get(intent)
+    if intent_def is None:
+        channel = "large"
+    else:
+        channel = intent_def.model
     reason = f"intent:{intent}/{'small' if channel == 'small' else 'default'}"
-    return (channel, reason)  # type: ignore[return-value]
+    return (channel, reason)
 
 
 def get_route_config(intent: str) -> dict:
     """获取 intent 的路由配置。"""
-    return INTENT_ROUTES.get(intent, INTENT_ROUTES["other"])
+    intent_def = intent_registry.get(intent)
+    if intent_def is None:
+        intent_def = intent_registry.get("other")
+    if intent_def is None:
+        return {"model": "large", "tools": "all"}
+    return intent_def.to_route()

@@ -4,6 +4,9 @@
 路由层根据分类结果决定走小模型还是大模型通道。
 
 不可用时无缝降级（Ollama 不通 → 跳过）。
+
+分类 prompt 从 agent/intents/*.yaml 自动构建：
+  - 新增意图只需加 YAML 文件，不改此处代码
 """
 
 from __future__ import annotations
@@ -15,30 +18,85 @@ import urllib.request
 
 logger = logging.getLogger("chips.endpoint.fast_llm")
 
-_CLASSIFY_PROMPT = """你是一个消息分类器。分析用户消息，输出候选意图。
+
+def _build_classify_prompt() -> str:
+    """从意图配置自动构建分类 prompt。"""
+    from agent.intent_loader import intent_registry
+
+    intents = intent_registry.get_all()
+    all_keywords = intent_registry.get_all_keywords()
+
+    # 构建 intent 列表
+    intent_lines = []
+    for name, intent in intents.items():
+        if name == "other":
+            continue
+        desc_parts = []
+        if intent.keywords:
+            desc_parts.append(f"关键词：{', '.join(intent.keywords[:5])}")
+        desc = "（" + "；".join(desc_parts) + "）" if desc_parts else ""
+        intent_lines.append(f"- {name}: {desc}")
+
+    intent_list = "\n".join(intent_lines)
+
+    # 构建规则
+    rules = []
+    for name, intent in intents.items():
+        if intent.time_sensitive:
+            kw = ", ".join(intent.keywords[:5])
+            rules.append(f'消息含"{kw}"等时间敏感词时，优先选 {name}。')
+        if intent.keywords and name not in ("greeting", "simple_qa", "other"):
+            kw = ", ".join(intent.keywords[:5])
+            rules.append(f'消息含文件路径或"{kw}"等词时，优先选 {name}。')
+
+    rules_text = "\n".join(rules) if rules else "无特殊规则。"
+
+    # 构建 predicted_tools 列表
+    all_tools = set()
+    for intent in intents.values():
+        if isinstance(intent.tools, list):
+            all_tools.update(intent.tools)
+    tools_list = ", ".join(sorted(all_tools - {""}))
+
+    prompt = f"""你是一个消息分类器。分析用户消息，输出候选意图。
 
 返回格式：
-{"candidates": [{"intent": "意图名", "predicted_tools": ["工具"], "score": 0-100}]}
+{{"candidates": [{{"intent": "意图名", "predicted_tools": ["工具"], "score": 0-100}}]}}
 
 intent 可选：
-- greeting: 问候打招呼
-- simple_qa: 简单常识（固定知识，不依赖时间）
-- web_search: 需要搜索网页（涉及"现在/最新/最近/流行/今天"等时间词时优先）
-- simple_coding: 简单编码
-- complex: 复杂分析
-- delegate: 需子 Agent
+{intent_list}
 - other: 以上都不属于
 
-关键规则：消息含"现在/最新/最近/流行/今天"等时间敏感词时，优先选 web_search。
+关键规则：
+{rules_text}
 
-predicted_tools 可选：web, bash, file, orchestrate, sub_agent
+predicted_tools 可选：{tools_list}
 
 示例：
-  你好 → {"candidates": [{"intent": "greeting", "predicted_tools": [], "score": 95}, {"intent": "other", "predicted_tools": [], "score": 5}]}
-  今天天气 → {"candidates": [{"intent": "web_search", "predicted_tools": ["web"], "score": 90}, {"intent": "simple_qa", "predicted_tools": [], "score": 10}]}
-  中国现在流行男歌手 → {"candidates": [{"intent": "web_search", "predicted_tools": ["web"], "score": 90}, {"intent": "simple_qa", "predicted_tools": [], "score": 10}]}
+  你好 → {{"candidates": [{{"intent": "greeting", "predicted_tools": [], "score": 95}}, {{"intent": "other", "predicted_tools": [], "score": 5}}]}}
+  今天天气 → {{"candidates": [{{"intent": "web_search", "predicted_tools": ["web"], "score": 90}}, {{"intent": "simple_qa", "predicted_tools": [], "score": 10}}]}}
 
 只输出 JSON。"""
+
+    return prompt
+
+
+# 模块级缓存（启动时构建一次）
+_CLASSIFY_PROMPT: str | None = None
+
+
+def _get_classify_prompt() -> str:
+    """获取分类 prompt（懒加载 + 缓存）。"""
+    global _CLASSIFY_PROMPT
+    if _CLASSIFY_PROMPT is None:
+        _CLASSIFY_PROMPT = _build_classify_prompt()
+    return _CLASSIFY_PROMPT
+
+
+def reload_classify_prompt():
+    """强制重新构建分类 prompt（用于热重载）。"""
+    global _CLASSIFY_PROMPT
+    _CLASSIFY_PROMPT = _build_classify_prompt()
 
 
 class FastLLM:
@@ -78,11 +136,13 @@ class FastLLM:
         intent 为候选列表中分数最高的合法标签。
         失败时安全降级返回 other。
         """
+        classify_prompt = _get_classify_prompt()
+
         payload = json.dumps({
             "model": self.MODEL,
             "format": "json",
             "messages": [
-                {"role": "system", "content": _CLASSIFY_PROMPT},
+                {"role": "system", "content": classify_prompt},
                 {"role": "user", "content": user_message},
             ],
             "stream": False,
@@ -110,8 +170,8 @@ class FastLLM:
             parsed = json.loads(content)
             candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
             validated = []
-            from agent.intent_config import INTENT_ROUTES
-            valid_labels = set(INTENT_ROUTES.keys())
+            from agent.intent_loader import intent_registry
+            valid_labels = set(intent_registry.get_all().keys())
             for c in candidates:
                 if isinstance(c, dict) and c.get("intent") in valid_labels:
                     validated.append(c)

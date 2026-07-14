@@ -551,17 +551,14 @@ class AIAgent:
             deferred_block = self._build_deferred_block()
             if deferred_block:
                 system += "\n\n" + deferred_block
-        # 复杂任务提示：检测到多步骤/多文件/多角色任务时，提醒 LLM 考虑 orchestrate
-        if not is_small and self._routing.get("intent") in ("complex", "delegate", "simple_coding"):
-            system += (
-                "\n\n<complex-task-hint>\n"
-                "当前任务看起来需要多个步骤。如果涉及以下情况，请使用 orchestrate 工具：\n"
-                "  - 需要同时查资料和写代码\n"
-                "  - 需要操作多个独立文件或模块\n"
-                "  - 可以用多个角色并行工作（研究员查资料 + 程序员实现）\n"
-                "  - 需要先调研再做决策\n"
-                "</complex-task-hint>"
-            )
+        # 意图专属提示（从 YAML 配置的 prompt_hint 字段读取，数据驱动）
+        if not is_small:
+            intent = self._routing.get("intent", "other")
+            from agent.intent_loader import intent_registry
+            hint = intent_registry.get_prompt_hint(intent)
+            if hint:
+                tag = f"{intent}-task-hint"
+                system += f"\n\n<{tag}>\n{hint.strip()}\n</{tag}>"
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)
@@ -707,15 +704,14 @@ class AIAgent:
                     if self.registry:
                         scope = self._routing.get("_model_scope")
                         defs = self.registry.get_definitions(self.tool_names, model_scope=scope)
-                        # 小模型通道：根据 intent 只保留允许的工具
-                        if scope == "small":
-                            intent = self._routing.get("intent", "other")
-                            from agent.intent_config import get_tools_for_intent
-                            allowed = get_tools_for_intent(intent)
-                            if isinstance(allowed, list):
-                                allowed_set = set(allowed)
-                                defs = [d for d in defs
-                                        if d.get("function", d).get("name") in allowed_set]
+                        # 根据 intent 过滤工具（所有通道生效）
+                        intent = self._routing.get("intent", "other")
+                        from agent.intent_config import get_tools_for_intent
+                        allowed = get_tools_for_intent(intent)
+                        if isinstance(allowed, list):
+                            allowed_set = set(allowed)
+                            defs = [d for d in defs
+                                    if d.get("function", d).get("name") in allowed_set]
                         tools.extend(defs)
                     mem_schemas = self.memory_manager.get_all_tool_schemas()
                     existing_names = {s.get("function", s).get("name") for s in tools}

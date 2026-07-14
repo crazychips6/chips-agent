@@ -10,7 +10,10 @@ import sys
 import termios
 import tty
 
-from .tui import _DIM, _TOOL, _RST  # 复用 TUI 的颜色定义
+# ANSI 颜色常量（与 agent.tui 包解耦，避免导入旧模块）
+_DIM = "\033[38;2;100;100;120m"   # dim gray
+_TOOL = "\033[38;2;255;200;100m"  # gold for tool calls
+_RST = "\033[0m"
 
 
 def pick_choice(question: str, choices: list[str] | None = None) -> str:

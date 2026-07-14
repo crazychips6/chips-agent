@@ -1,0 +1,28 @@
+# document 意图 — 文档处理
+name: document
+model: large
+tools:
+  - document
+  - file
+keywords:
+  - .pdf
+  - .docx
+  - .doc
+  - .txt
+  - .eml
+  - .msg
+  - 文档
+  - 文件
+  - 解析
+  - 提取
+  - OCR
+  - 识别
+  - 读取
+  - 打开
+prompt_hint: |
+  当前任务涉及文档处理，请使用 document 工具：
+    - document(action='read', path='...') — 提取文档文本
+    - document(action='info', path='...') — 获取元信息
+    - document(action='ocr', path='...') — 图片 OCR
+    - document(action='convert', path='...') — PDF 转 Markdown
+  不要使用 bash 或其他工具处理文档。

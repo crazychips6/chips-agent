@@ -13,7 +13,7 @@ from typing import AsyncGenerator
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -486,6 +486,46 @@ async def chat_sync(body: ChatRequest, user: str | None = Depends(optional_user)
     session_manager.add_message(session_id, "assistant", reply)
     
     return {"reply": reply, "session_id": session_id}
+
+
+# ── 文件上传 ──
+
+_SUPPORTED_UPLOAD_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".txt", ".md", ".rst",
+    ".eml", ".msg",
+    ".png", ".jpg", ".jpeg", ".tiff", ".bmp",
+}
+_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
+
+@app.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    user: str | None = Depends(optional_user),
+):
+    """文件上传并返回临时路径。"""
+    if not file.filename:
+        raise HTTPException(400, "文件名不能为空")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _SUPPORTED_UPLOAD_EXTENSIONS:
+        raise HTTPException(400, f"不支持的文件类型：{ext}")
+
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(400, "文件过大（限制 50MB）")
+
+    upload_dir = Path("/tmp/chips-uploads")
+    upload_dir.mkdir(exist_ok=True)
+
+    dest = upload_dir / f"{uuid4().hex}{ext}"
+    dest.write_bytes(content)
+
+    return {
+        "path": str(dest),
+        "filename": file.filename,
+        "size": len(content),
+    }
 
 
 # ── 静态文件 ──

@@ -1,0 +1,13 @@
+# simple_coding 意图 — 简单编码
+name: simple_coding
+model: large
+tools: "all"
+keywords:
+  - 写代码
+  - 代码
+  - 编程
+  - 函数
+  - 脚本
+  - debug
+  - 修复
+  - bug

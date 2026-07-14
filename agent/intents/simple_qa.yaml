@@ -1,0 +1,11 @@
+# simple_qa 意图 — 简单常识
+name: simple_qa
+model: small
+tools: []
+keywords:
+  - 什么是
+  - 怎么读
+  - 多少钱
+  - 几点
+  - 哪里
+  - 谁是

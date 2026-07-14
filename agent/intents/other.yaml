@@ -1,0 +1,5 @@
+# other 意图 — 兜底
+name: other
+model: large
+tools: "all"
+keywords: []

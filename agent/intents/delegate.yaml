@@ -1,0 +1,10 @@
+# delegate 意图 — 需子 Agent
+name: delegate
+model: large
+tools: "all"
+keywords:
+  - 委派
+  - 子任务
+  - 并行
+  - 多人
+  - 团队

@@ -1,0 +1,16 @@
+# web_search 意图 — 需要搜索网页
+name: web_search
+model: large
+tools: "all"
+keywords:
+  - 现在
+  - 最新
+  - 最近
+  - 流行
+  - 今天
+  - 昨天
+  - 明天
+  - 搜索
+  - 查一下
+  - 找一下
+time_sensitive: true

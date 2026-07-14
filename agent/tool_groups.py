@@ -20,7 +20,11 @@ TOOL_GROUPS: dict[str, dict[str, str]] = {
         "name": "Agent 工具",
         "description": "技能管理、子 Agent 查询",
     },
+    "doc": {
+        "name": "文档工具",
+        "description": "文档解析、OCR、元信息提取",
+    },
 }
 
 # 非 core 组的工具默认延迟加载
-DEFERRED_GROUPS = {"dev", "agent"}
+DEFERRED_GROUPS = {"dev", "agent", "doc"}
