@@ -51,11 +51,14 @@ class ContextRouter:
             return []
         return list(history)[-top_n:]
 
-    def match(self, text: str, session_id: str) -> str | None:
+    def match(self, text: str, session_id: str) -> ClassifyResult | None:
         """基于上下文匹配意图。
 
-        返回复用的意图名或 None（需要继续走后续流程）。
+        返回 ClassifyResult 或 None（需要继续走后续流程）。
         """
+        from agent.classify_result import ClassifyResult, PRIORITY_CONTEXT
+        from agent.intent_loader import intent_registry
+
         if not session_id:
             return None
 
@@ -71,7 +74,17 @@ class ContextRouter:
                 # 排除 greeting/simple_qa（太泛，不适合复用）
                 if last_intent not in ("greeting", "simple_qa", "other"):
                     logger.info("context_reuse intent=%s text=%s", last_intent, text[:30])
-                    return last_intent
+                    intent_def = intent_registry.get(last_intent)
+                    predicted_tools = []
+                    if intent_def and isinstance(intent_def.tools, list):
+                        predicted_tools = intent_def.tools
+                    return ClassifyResult(
+                        intent=last_intent,
+                        confidence=0.7,  # 上下文匹配置信度
+                        priority=PRIORITY_CONTEXT,
+                        source="context",
+                        predicted_tools=predicted_tools,
+                    )
 
         # 策略 2：最近 3 轮都是同一意图 → 当前消息大概率还是同一意图
         if len(recent_intents) >= 3:
@@ -80,7 +93,17 @@ class ContextRouter:
                 # 排除太泛的意图
                 if last_intent not in ("greeting", "simple_qa", "other"):
                     logger.info("context_streak intent=%s count=3", last_intent)
-                    return last_intent
+                    intent_def = intent_registry.get(last_intent)
+                    predicted_tools = []
+                    if intent_def and isinstance(intent_def.tools, list):
+                        predicted_tools = intent_def.tools
+                    return ClassifyResult(
+                        intent=last_intent,
+                        confidence=0.8,  # 连续 3 轮同一意图，置信度更高
+                        priority=PRIORITY_CONTEXT,
+                        source="context",
+                        predicted_tools=predicted_tools,
+                    )
 
         return None
 

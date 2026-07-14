@@ -85,16 +85,29 @@ class RuleMatcher:
         """热重载规则。"""
         self._load_rules()
 
-    def match(self, text: str) -> str | None:
-        """匹配文本，返回命中的意图名或 None。
+    def match(self, text: str) -> ClassifyResult | None:
+        """匹配文本，返回 ClassifyResult 或 None。
 
         按优先级顺序匹配，返回第一个命中的意图。
         """
+        from agent.classify_result import ClassifyResult, PRIORITY_RULE
+        from agent.intent_loader import intent_registry
+
         for rule in self._rules:
             if rule.match(text):
                 logger.info("rule_match intent=%s type=%s text=%s",
                             rule.intent_name, rule.type, text[:30])
-                return rule.intent_name
+                intent_def = intent_registry.get(rule.intent_name)
+                predicted_tools = []
+                if intent_def and isinstance(intent_def.tools, list):
+                    predicted_tools = intent_def.tools
+                return ClassifyResult(
+                    intent=rule.intent_name,
+                    confidence=1.0,  # 规则匹配置信度为 1
+                    priority=PRIORITY_RULE,
+                    source="rule",
+                    predicted_tools=predicted_tools,
+                )
         return None
 
 

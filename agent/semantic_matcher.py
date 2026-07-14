@@ -272,6 +272,30 @@ class SemanticMatcher:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
 
+    def match_one(self, text: str, threshold: float = 0.5) -> ClassifyResult | None:
+        """匹配文本，返回最佳的 ClassifyResult 或 None。"""
+        from agent.classify_result import ClassifyResult, PRIORITY_SEMANTIC
+        from agent.intent_loader import intent_registry
+
+        candidates = self.match(text, top_k=1, threshold=threshold)
+        if not candidates:
+            return None
+
+        best_intent, best_score = candidates[0]
+        intent_def = intent_registry.get(best_intent)
+        predicted_tools = []
+        if intent_def and isinstance(intent_def.tools, list):
+            predicted_tools = intent_def.tools
+
+        return ClassifyResult(
+            intent=best_intent,
+            confidence=best_score,
+            priority=PRIORITY_SEMANTIC,
+            source="semantic",
+            predicted_tools=predicted_tools,
+            candidates=[{"intent": i, "score": int(s * 100)} for i, s in candidates],
+        )
+
 
 # 模块级单例
 semantic_matcher = SemanticMatcher()

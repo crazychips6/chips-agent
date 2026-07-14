@@ -1,12 +1,13 @@
 """FastLLM — 端侧小模型分类器
 
-不再做回复拦截，只做意图分类 + 工具预测。
-路由层根据分类结果决定走小模型还是大模型通道。
+四层分类架构 + 仲裁机制：
+  1. 规则匹配（~0ms）→ 命中直接返回
+  2. 上下文匹配（~0ms）→ 复用历史意图
+  3. 语义检索（~10ms）→ TF-IDF/Embedding 候选 Top-K
+  4. LLM 分类（~500ms）→ 仅前三层未命中时调用
+  仲裁：高置信度直接采信，否则按优先级排序
 
-不可用时无缝降级（Ollama 不通 → 跳过）。
-
-分类 prompt 从 agent/intents/*.yaml 自动构建：
-  - 新增意图只需加 YAML 文件，不改此处代码
+分类 prompt 从 agent/intents/*.yaml 自动构建。
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def reload_classify_prompt():
 class FastLLM:
     """端侧小模型分类器。
 
-    只做分类和工具预测，不回复内容。
+    四层分类 + 仲裁机制。
     """
 
     OLLAMA_BASE = "http://localhost:11434"
@@ -131,81 +132,80 @@ class FastLLM:
         self._available = None
 
     def classify(self, user_message: str, session_id: str = "") -> dict:
-        """分类用户消息，返回 {intent, predicted_tools, candidates, confidence}。
+        """分类用户消息，返回 {intent, predicted_tools, candidates, confidence, source}。
 
-        四层分类架构：
+        四层分类 + 仲裁：
         1. 规则匹配（~0ms）→ 命中直接返回
         2. 上下文匹配（~0ms）→ 复用历史意图
-        3. 语义检索（~10ms）→ TF-IDF/Embedding 候选 Top-K
+        3. 语义检索（~10ms）→ TF-IDF/Embedding
         4. LLM 分类（~500ms）→ 仅前三层未命中时调用
+        仲裁：高置信度（>=0.95）直接采信，否则按优先级排序
         """
-        from agent.intent_loader import intent_registry
+        from agent.classify_result import ClassifyResult, arbitrate
+
+        results: list[ClassifyResult] = []
 
         # ── 阶段一：规则预过滤（~0ms）──
         from agent.rule_matcher import rule_matcher
-        rule_intent = rule_matcher.match(user_message)
-        if rule_intent:
-            intent_def = intent_registry.get(rule_intent)
-            predicted_tools = []
-            if intent_def and isinstance(intent_def.tools, list):
-                predicted_tools = intent_def.tools
-            logger.info("classify_source=rule intent=%s text=%s", rule_intent, user_message[:30])
-            result = {
-                "intent": rule_intent,
-                "predicted_tools": predicted_tools,
-                "candidates": [{"intent": rule_intent, "predicted_tools": predicted_tools, "score": 100}],
-                "confidence": "high",
-                "source": "rule",
-            }
-            # 更新上下文历史
-            from agent.context_router import context_router
-            context_router.update(session_id, rule_intent)
-            return result
+        rule_result = rule_matcher.match(user_message)
+        if rule_result:
+            # 规则匹配置信度为 1.0，直接返回
+            logger.info("classify_source=rule intent=%s text=%s",
+                        rule_result.intent, user_message[:30])
+            self._update_context(session_id, rule_result.intent)
+            return rule_result.to_dict()
 
         # ── 阶段二：上下文匹配（~0ms）──
         from agent.context_router import context_router
-        context_intent = context_router.match(user_message, session_id)
-        if context_intent:
-            intent_def = intent_registry.get(context_intent)
-            predicted_tools = []
-            if intent_def and isinstance(intent_def.tools, list):
-                predicted_tools = intent_def.tools
-            logger.info("classify_source=context intent=%s text=%s", context_intent, user_message[:30])
-            result = {
-                "intent": context_intent,
-                "predicted_tools": predicted_tools,
-                "candidates": [{"intent": context_intent, "predicted_tools": predicted_tools, "score": 90}],
-                "confidence": "medium",
-                "source": "context",
-            }
-            context_router.update(session_id, context_intent)
-            return result
+        context_result = context_router.match(user_message, session_id)
+        if context_result:
+            results.append(context_result)
 
         # ── 阶段三：语义检索（~10ms）──
         from agent.semantic_matcher import semantic_matcher
-        semantic_candidates = semantic_matcher.match(user_message, top_k=3, threshold=0.15)
-        if semantic_candidates:
-            best_intent, best_score = semantic_candidates[0]
-            # 高置信度（>0.5）直接返回，不走 LLM
-            if best_score >= 0.5:
-                intent_def = intent_registry.get(best_intent)
-                predicted_tools = []
-                if intent_def and isinstance(intent_def.tools, list):
-                    predicted_tools = intent_def.tools
-                logger.info("classify_source=semantic intent=%s score=%.2f text=%s",
-                            best_intent, best_score, user_message[:30])
-                result = {
-                    "intent": best_intent,
-                    "predicted_tools": predicted_tools,
-                    "candidates": [{"intent": i, "predicted_tools": [], "score": int(s * 100)}
-                                   for i, s in semantic_candidates],
-                    "confidence": "high",
-                    "source": "semantic",
-                }
-                context_router.update(session_id, best_intent)
-                return result
+        semantic_result = semantic_matcher.match_one(user_message, threshold=0.5)
+        if semantic_result:
+            results.append(semantic_result)
 
         # ── 阶段四：LLM 分类（~500ms）──
+        # 只有当前三层都没有高置信度结果时才调用 LLM
+        should_call_llm = True
+        for r in results:
+            if r.confidence >= 0.7:
+                should_call_llm = False
+                break
+
+        if should_call_llm:
+            llm_result = self._llm_classify(user_message)
+            if llm_result:
+                results.append(llm_result)
+
+        # ── 仲裁 ──
+        final = arbitrate(results)
+        if final:
+            logger.info("classify_source=%s intent=%s confidence=%.2f text=%s",
+                        final.source, final.intent, final.confidence, user_message[:30])
+            self._update_context(session_id, final.intent)
+            return final.to_dict()
+
+        # 兜底
+        return {"intent": "other", "predicted_tools": [], "candidates": [],
+                "confidence": 0, "source": "fallback"}
+
+    def _update_context(self, session_id: str, intent: str):
+        """更新上下文历史。"""
+        if session_id:
+            from agent.context_router import context_router
+            context_router.update(session_id, intent)
+
+    def _llm_classify(self, user_message: str) -> ClassifyResult | None:
+        """调用 LLM 分类。"""
+        from agent.classify_result import ClassifyResult, PRIORITY_LLM
+        from agent.intent_loader import intent_registry
+
+        if not self.is_available():
+            return None
+
         classify_prompt = _get_classify_prompt()
 
         payload = json.dumps({
@@ -240,28 +240,34 @@ class FastLLM:
             parsed = json.loads(content)
             candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
             validated = []
-            from agent.intent_loader import intent_registry
             valid_labels = set(intent_registry.get_all().keys())
             for c in candidates:
                 if isinstance(c, dict) and c.get("intent") in valid_labels:
                     validated.append(c)
             validated.sort(key=lambda x: x.get("score", 0), reverse=True)
-            best = validated[0] if validated else {"intent": "other", "predicted_tools": [], "score": 0}
-            logger.info("classify_source=llm intent=%s tools=%s score=%s candidates=%d",
-                        best["intent"], best.get("predicted_tools", []),
-                        best.get("score"), len(validated))
-            result = {
-                "intent": best["intent"],
-                "predicted_tools": best.get("predicted_tools", []),
-                "candidates": validated,
-                "confidence": "high" if validated else "low",
-                "source": "llm",
-            }
-            context_router.update(session_id, best["intent"])
-            return result
+            best = validated[0] if validated else None
+            if not best:
+                return None
+
+            intent_def = intent_registry.get(best["intent"])
+            predicted_tools = []
+            if intent_def and isinstance(intent_def.tools, list):
+                predicted_tools = intent_def.tools
+
+            # LLM 分类的置信度基于 score（0-100 映射到 0-1）
+            confidence = best.get("score", 50) / 100.0
+
+            return ClassifyResult(
+                intent=best["intent"],
+                confidence=confidence,
+                priority=PRIORITY_LLM,
+                source="llm",
+                predicted_tools=predicted_tools or best.get("predicted_tools", []),
+                candidates=validated,
+            )
         except Exception as exc:
-            logger.warning("fast_llm_classify_failed: %s", exc)
-            return {"intent": "other", "predicted_tools": [], "candidates": [], "confidence": "low"}
+            logger.warning("llm_classify_failed: %s", exc)
+            return None
 
     # ── Trace 分析（保留，不变） ──
 
