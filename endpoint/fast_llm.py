@@ -133,21 +133,22 @@ class FastLLM:
     def classify(self, user_message: str) -> dict:
         """分类用户消息，返回 {intent, predicted_tools, candidates, confidence}。
 
-        流程：
-        1. 规则预过滤（不走 LLM，高频确定性意图直接返回）
-        2. LLM 分类（规则未命中时调用 Ollama）
+        三层分类架构：
+        1. 规则匹配（~0ms）→ 命中直接返回
+        2. 语义检索（~10ms）→ TF-IDF 候选 Top-K
+        3. LLM 分类（~500ms）→ 仅前两层未命中时调用
         """
-        # ── 阶段一：规则预过滤 ──
+        from agent.intent_loader import intent_registry
+
+        # ── 阶段一：规则预过滤（~0ms）──
         from agent.rule_matcher import rule_matcher
         rule_intent = rule_matcher.match(user_message)
         if rule_intent:
-            from agent.intent_loader import intent_registry
             intent_def = intent_registry.get(rule_intent)
-            # 从意图配置获取 predicted_tools
             predicted_tools = []
             if intent_def and isinstance(intent_def.tools, list):
                 predicted_tools = intent_def.tools
-            logger.info("rule_match intent=%s text=%s", rule_intent, user_message[:30])
+            logger.info("classify_source=rule intent=%s text=%s", rule_intent, user_message[:30])
             return {
                 "intent": rule_intent,
                 "predicted_tools": predicted_tools,
@@ -156,7 +157,29 @@ class FastLLM:
                 "source": "rule",
             }
 
-        # ── 阶段二：LLM 分类 ──
+        # ── 阶段二：语义检索（~10ms）──
+        from agent.semantic_matcher import semantic_matcher
+        semantic_candidates = semantic_matcher.match(user_message, top_k=3, threshold=0.15)
+        if semantic_candidates:
+            best_intent, best_score = semantic_candidates[0]
+            # 高置信度（>0.5）直接返回，不走 LLM
+            if best_score >= 0.5:
+                intent_def = intent_registry.get(best_intent)
+                predicted_tools = []
+                if intent_def and isinstance(intent_def.tools, list):
+                    predicted_tools = intent_def.tools
+                logger.info("classify_source=semantic intent=%s score=%.2f text=%s",
+                            best_intent, best_score, user_message[:30])
+                return {
+                    "intent": best_intent,
+                    "predicted_tools": predicted_tools,
+                    "candidates": [{"intent": i, "predicted_tools": [], "score": int(s * 100)}
+                                   for i, s in semantic_candidates],
+                    "confidence": "high",
+                    "source": "semantic",
+                }
+
+        # ── 阶段三：LLM 分类（~500ms）──
         classify_prompt = _get_classify_prompt()
 
         payload = json.dumps({
