@@ -232,8 +232,8 @@ IDENTITY_PROMPT = f"""你是 chips，一个通用 AI agent，由 chips-agent 驱
 
 CONVENTIONS_PROMPT = """## 回复规范
 - 使用中文给出最终回复
-- 如果需要执行终端命令，调用 terminal 工具
-- 一次只调用一个工具，等待结果后再决定下一步
+- 简单任务：一次只调一个工具，做完再继续下一步
+- 复杂任务（多步骤、多文件、多角色）：优先考虑用 orchestrate 工具拆成子任务并行执行
 - 任务完成后，用中文给出简洁总结
 - 如果同一工具或同类工具连续报错 3 次，说明当前方法行不通。停止重试，换完全不同的策略，或直接向用户说明失败原因"""
 
@@ -292,6 +292,27 @@ class PromptBuilder:
             self._has_verbose_printed = True
 
         return self._assemble_and_truncate(layers)
+
+    def build_minimal(self, *, goal: str = "", max_iterations: int = 10) -> str:
+        """最小 prompt —— 用于子 Agent，只包含目标和基本行为约束。
+
+        不继承主 Agent 的完整身份、不加载记忆快照、不注入技能索引。
+
+        Args:
+            goal: 子任务目标
+            max_iterations: 最大执行轮数，子 Agent 会据此规划执行策略
+        """
+        parts = [
+            "你是 chips 的子 Agent，执行分配给你的子任务。",
+            f"## 执行约束",
+            f"- 你最多有 {max_iterations} 轮执行机会（每次工具调用或回复算一轮）",
+            f"- 请合理规划：先用最少步骤获取关键信息，再做判断",
+            f"- 如果 {max_iterations} 轮内无法完成，先给出已有结果再说明未完成的部分",
+            "- 完成任务后直接输出结果，不要向主 Agent 提问或请求澄清。",
+        ]
+        if goal:
+            parts.append(f"\n## 目标\n{goal}")
+        return "\n\n".join(parts)
 
     def build_dynamic(
         self,

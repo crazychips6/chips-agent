@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 
 # 移除 surrogate 字符（如 DeepSeek reasoning_content 中可能出现的 \udce4），
 # 防止后续请求序列化时 UnicodeEncodeError: surrogates not allowed
@@ -63,6 +64,8 @@ class AIAgent:
         self.stream = stream
         self._max_retries = max_retries
         self.prompt_builder = PromptBuilder(verbose=verbose)
+        # 子 Agent 目标（不为空时表示当前 Agent 是子 Agent，使用最小 prompt）
+        self.goal: str = ""
         # registry / tool_names / memory 由外部注入，后续阶段改为构造参数注入
         self.registry: ToolRegistry | None = None
         self.tool_names: set[str] = set()
@@ -120,12 +123,14 @@ class AIAgent:
 
     # ── 降级状态重置 ──
 
-    def _reset_fallback_session(self):
+    def _reset_fallback_session(self, is_top_level: bool = False):
         """重置 FallbackGateway 的会话级降级状态。
 
-        新一轮对话开始时调用，让之前失败的模型有机会重新尝试。
-        gateway 链为 UsageRecorder(FallbackGateway(...)) 或直接 FallbackGateway。
+        只在顶层用户对话开始时重置（is_top_level=True），
+        子 Agent 不重置，避免重复重试已失败的主模型。
         """
+        if not is_top_level:
+            return
         gw = self.gateway
         # 穿透 UsageRecorder 装饰器
         if hasattr(gw, '_inner'):
@@ -222,8 +227,18 @@ class AIAgent:
     # ── 冷冻缓存 ──
 
     def _ensure_cache(self):
-        """构建冷冻 system prompt 缓存（仅首次执行）。"""
+        """构建冷冻 system prompt 缓存（仅首次执行）。
+
+        子 Agent（self.goal 不为空）使用最小 prompt，
+        只包含目标和基本行为约束，不继承主 Agent 的完整 identity。
+        """
         if self._frozen_base is not None:
+            return
+        if self.goal:
+            mi = getattr(self, '_build_minimal_max_iter', 10)
+            self._frozen_base = self.prompt_builder.build_minimal(
+                goal=self.goal, max_iterations=mi,
+            )
             return
         snapshot = self.memory_manager.snapshot()
         self._frozen_base = self.prompt_builder.build_frozen(
@@ -319,7 +334,10 @@ class AIAgent:
         tools: list[str] | None = None,
         max_iterations: int = 10,
         context: str = "",
+        _agent_callback: Callable | None = None,
     ) -> str:
+        if _agent_callback is None:
+            _agent_callback = getattr(self, '_agent_callback', None)
         """创建并同步执行一个子 Agent，返回 record id。
 
         子 Agent 共享父 Agent 的 gateway / registry / memory_manager，
@@ -340,6 +358,10 @@ class AIAgent:
         record_id = self._sub_agent_manager.create_with_ttl(agent_name, task, ttl=300)
         self._sub_agent_manager.update(record_id, status="running")  # str → AgentStatus 自动转换
 
+        # TUI 回调：子 Agent 开始
+        if _agent_callback:
+            _agent_callback(agent_name, task, None, record_id)
+
         try:
             from tool.builtins.agent_tools import build_sub_agent
 
@@ -357,6 +379,11 @@ class AIAgent:
 
             output = sub.run_conversation(final_task, max_iterations=max_iterations)
             self._sub_agent_manager.capture_result(record_id, sub.messages, output)
+            # TUI 回调：子 Agent 完成
+            if _agent_callback:
+                record = self._sub_agent_manager.get(record_id)
+                summary = (output or "")[:200]
+                _agent_callback(agent_name, task, summary, record_id)
             logger.info(
                 "fork_sub_agent done id=%s name=%s iter=%d tools=%d",
                 record_id, agent_name,
@@ -412,6 +439,9 @@ class AIAgent:
         if self._fast_llm is not None and self._fast_llm.is_available():
             result = self._fast_llm.classify(user_message)
         else:
+            if self._fast_llm is not None:
+                import sys
+                print("\n  ⚡ 端侧模型（Ollama）不可用，小模型直答已跳过", file=sys.stderr)
             result = {"intent": "other", "predicted_tools": [], "confidence": "low"}
 
         # 检查黑名单 + 获取决策原因
@@ -477,6 +507,8 @@ class AIAgent:
                 logger.info("small_direct_reply reply=%s", reply[:60])
                 return reply
         except Exception as exc:
+            import sys
+            print(f"\n  ⚡ 小模型直答失败（{exc}），切到大模型", file=sys.stderr)
             logger.warning("small_direct_failed: %s", exc)
             return None
         return None
@@ -519,6 +551,17 @@ class AIAgent:
             deferred_block = self._build_deferred_block()
             if deferred_block:
                 system += "\n\n" + deferred_block
+        # 复杂任务提示：检测到多步骤/多文件/多角色任务时，提醒 LLM 考虑 orchestrate
+        if not is_small and self._routing.get("intent") in ("complex", "delegate", "simple_coding"):
+            system += (
+                "\n\n<complex-task-hint>\n"
+                "当前任务看起来需要多个步骤。如果涉及以下情况，请使用 orchestrate 工具：\n"
+                "  - 需要同时查资料和写代码\n"
+                "  - 需要操作多个独立文件或模块\n"
+                "  - 可以用多个角色并行工作（研究员查资料 + 程序员实现）\n"
+                "  - 需要先调研再做决策\n"
+                "</complex-task-hint>"
+            )
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)
@@ -589,10 +632,12 @@ class AIAgent:
 
     # ── 主循环 ──
 
-    def run_conversation(self, user_message: str, max_iterations: int = 20, *, chunk_callback=None, tool_callback=None) -> str:
+    def run_conversation(self, user_message: str, max_iterations: int = 20, *,
+                         chunk_callback=None, tool_callback=None, agent_callback=None) -> str:
+        self._agent_callback = agent_callback
         self.turn_count += 1
         # 新一轮对话，重置模型降级状态（让主用模型有机会重新尝试）
-        self._reset_fallback_session()
+        self._reset_fallback_session(agent_callback is not None)
         # 活跃会话数 +1
         try:
             from gateway.metrics import session_active
@@ -622,6 +667,9 @@ class AIAgent:
                 return reply
 
         # 阶段四：对话准备（system prompt + memory 预热）
+        # 保存本轮 max_iterations，供 _ensure_cache 构建子 Agent prompt 用
+        if self.goal:
+            self._build_minimal_max_iter = max_iterations
         system = self._prepare_conversation(user_message)
 
         # 阶段五：ReAct 循环
@@ -835,6 +883,7 @@ class AIAgent:
                         # 截图结果 → 注入 ImageBlock（后续迭代 LLM 可见）
                         self._maybe_inject_image(tool_result)
                     self._save_pending()
+                    self._save_checkpoint(iteration)
                     # 中断检查 ③：工具执行批后，在此轮结束前检查
                     if self._is_interrupted():
                         logger.info("interrupt_requested after_tools iteration=%d", iteration)
@@ -855,7 +904,9 @@ class AIAgent:
                             content = result.content
                     self.messages.append(self._build_assistant_msg(result))
                     self._save_pending()
+                    self._save_checkpoint(iteration)
                     last_text_reply = content
+                    self._clear_checkpoint()
                     if content:
                         if self.stream:
                             return ""  # 已由 chat_stream 的 on_chunk 实时输出
@@ -868,9 +919,14 @@ class AIAgent:
                 if last_text_reply:
                     return f"{last_text_reply}\n\n---\n⚠ 对话已被中断"
                 return "⚠ 对话已被中断"
+            term_msg = (
+                f"⛔ 已被强制终止：达到最大执行轮数（{max_iterations} 轮）。"
+                if self.goal else
+                f"已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
+            )
             if last_text_reply:
-                return f"{last_text_reply}\n\n---\n⚠ 已达到最大迭代次数 ({max_iterations})，如有需要请简化请求。"
-            return f"已达到最大迭代次数 ({max_iterations})，对话可能不完整。如有需要请简化请求。"
+                return f"{last_text_reply}\n\n---\n{term_msg}"
+            return term_msg
         finally:
             try:
                 from gateway.metrics import session_active
@@ -883,6 +939,59 @@ class AIAgent:
             self._analyze_and_learn(user_message, last_text_reply)
             if self.plugin_manager:
                 self.plugin_manager.dispatch_session_end(self.messages)
+
+    # ── Checkpoint ──
+
+    @property
+    def _checkpoint_file(self) -> str:
+        return os.path.join(os.path.dirname(self.session_db._path) if self.session_db else ".chips",
+                           "checkpoint.json")
+
+    def _save_checkpoint(self, iteration: int):
+        """每轮 ReAct 迭代结束后保存 checkpoint。
+
+        保存当前迭代进度到文件，进程崩溃后可通过 --resume 恢复。
+        """
+        if not self.session_id:
+            return
+        try:
+            cp = {
+                "session_id": self.session_id,
+                "turn_count": self.turn_count,
+                "iteration": iteration + 1,  # 已完成 iteration+1 轮
+                "message_count": len(self.messages),
+                "timestamp": time.time(),
+            }
+            path = self._checkpoint_file
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(cp, f)
+        except Exception:
+            logger.debug("checkpoint_save_failed", exc_info=True)
+
+    def _clear_checkpoint(self):
+        """正常完成时清除 checkpoint。"""
+        try:
+            path = self._checkpoint_file
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            pass
+
+    @staticmethod
+    def check_checkpoint(db_path: str = ".chips/sessions.db") -> dict | None:
+        """检测是否有未完成的 checkpoint，供 boot.py 在 --resume 时使用。"""
+        cp_path = os.path.join(os.path.dirname(db_path), "checkpoint.json")
+        if not os.path.isfile(cp_path):
+            return None
+        try:
+            with open(cp_path) as f:
+                cp = json.load(f)
+            if not isinstance(cp, dict) or "session_id" not in cp:
+                return None
+            return cp
+        except Exception:
+            return None
 
     def shutdown(self):
         """释放资源：关闭 MCP 连接、清理线程和所有记忆提供者。"""

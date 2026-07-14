@@ -95,6 +95,25 @@ def resolve_agent_config(
     }
 
 
+# 子 Agent 禁止使用的工具集
+_SUB_AGENT_FORBIDDEN = frozenset({"orchestrate", "sub_agent", "clarify"})
+
+
+def _resolve_registry_tools(agent_name: str) -> set[str] | None:
+    """从 AgentRegistry 查询角色的预设工具列表（若有 registry 且角色存在）。"""
+    if not agent_name or not _registry:
+        return None
+    entry = _registry.get(agent_name)
+    if not entry:
+        return None
+    raw = entry.get("tools")
+    if not raw:
+        return None
+    from tool.toolsets import resolve_multiple_toolsets
+    resolved = resolve_multiple_toolsets(raw)
+    return set(resolved) if resolved else None
+
+
 def build_sub_agent(
     task: str,
     parent: AIAgent,
@@ -108,12 +127,14 @@ def build_sub_agent(
     session_db=None,
     session_id: str = "",
 ) -> tuple[AIAgent, str, int]:
-    """创建并配置子 Agent，返回 (sub_agent, final_task, max_iterations)。"""
-    if context:
-        final_task = f"[上下文]\n{context}\n\n[任务]\n{task}"
-    else:
-        final_task = task
+    """创建并配置子 Agent，返回 (sub_agent, final_task, max_iterations)。
 
+    原则（LangGraph 风格）：
+    - 系统提示词：不继承，子 Agent 有独立的最小 prompt
+    - 历史消息：不传原始长对话，只传 goal
+    - 工具集：按需分配，默认空，必须由主 Agent 显式指定
+    - 禁止使用：orchestrate（不能创建子 Agent）、clarify（不能反问用户）
+    """
     from agent.loop import AIAgent
 
     sub = AIAgent(
@@ -123,16 +144,27 @@ def build_sub_agent(
     )
     sub.registry = parent.registry
     sub.memory_manager = parent.memory_manager
+    # 设置目标，子 Agent 使用最小 prompt（不含主 Agent 的完整身份）
+    sub.goal = task
 
+    # 工具集：显式指定 > AgentRegistry 预设 > 空
     if tools:
         from tool.toolsets import resolve_multiple_toolsets
         resolved = resolve_multiple_toolsets(tools)
-        sub.tool_names = set(resolved) & parent.registry.tool_names
+        sub.tool_names = (set(resolved) & parent.registry.tool_names) - _SUB_AGENT_FORBIDDEN
     else:
-        sub.tool_names = parent.tool_names
+        # 没有显式指定 → 查 AgentRegistry 是否有该角色的预设工具
+        registry_tools = _resolve_registry_tools(agent_name)
+        if registry_tools:
+            sub.tool_names = registry_tools - _SUB_AGENT_FORBIDDEN
+        else:
+            sub.tool_names = parent.tool_names - _SUB_AGENT_FORBIDDEN
 
-    if parent.context_files:
-        sub.context_files = parent.context_files
+    # 不继承主 Agent 的 context_files（子 Agent 有独立目标）
+    # 不传原始长对话，context 参数作为额外上下文拼入 goal
+    final_task = task
+    if context:
+        final_task = f"{task}\n\n附加上下文：\n{context}"
 
     sub.session_db = session_db or parent.session_db
     if sub.session_db and session_id:

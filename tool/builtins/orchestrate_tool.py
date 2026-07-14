@@ -186,13 +186,21 @@ def _run_pipeline(args: dict, parent) -> str:
 def _run_debate(args: dict, parent) -> str:
     agents = args.get("agents", [])
     task = args.get("task", "")
+    perspectives = args.get("perspectives", []) or []
     if not agents:
         return json.dumps({"error": "agents 不能为空"})
     if not task:
         return json.dumps({"error": "task 不能为空"})
 
-    # 并发执行：同一 task 多个 Agent
-    steps = [{"agent": a, "task": task} for a in agents]
+    # 如果提供了 perspectives 且长度匹配 → 每个 Agent 拿自己的立场
+    # 否则所有 Agent 使用同一个 task
+    # debate 使用 5 轮限制：辩论侧重观点质量而非深度搜索
+    if perspectives and len(perspectives) == len(agents):
+        steps = [{"agent": a, "task": p, "max_iterations": 5}
+                 for a, p in zip(agents, perspectives)]
+    else:
+        steps = [{"agent": a, "task": task, "max_iterations": 5}
+                 for a in agents]
     results = _run_parallel(steps, parent, tag_prefix="debate")
 
     return json.dumps({
@@ -332,14 +340,23 @@ ORCHESTRATE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "orchestrate",
-        "description": "委派任务给一个或多个 Agent 执行",
+        "description": "将复杂任务拆为子任务并行/串行执行，比逐个手动调用快 3-5 倍。"
+                       "适用场景：同时查资料+写代码、操作多个独立模块、多角色协作。"
+                       "不适合：单步操作（查天气、读文件等）、前后依赖强的步骤",
         "parameters": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
                     "enum": ["single", "supervisor", "pipeline", "decompose", "debate"],
-                    "description": "single=单步, supervisor=多步, decompose=自动分解, pipeline=链式, debate=对比",
+                    "description": (
+                        "选择模式："
+                        "single=简单委派（适合单步任务）；"
+                        "supervisor=串行多步（适合步骤明确的任务）；"
+                        "decompose=自动拆维度并行（适合多维度分析、对比、调研）；"
+                        "pipeline=链式传递（适合上一步结果直接作为下一步输入）；"
+                        "debate=多角色独立回答后对比（仅限有争议性话题，需通过 perspectives 给各方分配不同立场，各 Agent 限 5 轮）"
+                    ),
                 },
                 "agent": {
                     "type": "string",
@@ -382,7 +399,15 @@ ORCHESTRATE_SCHEMA = {
                 "agents": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "参与 Agent 列表（debate）",
+                    "description": "参与 Agent 列表（debate 模式必填），每个 agent 代表一个辩论方",
+                },
+                "perspectives": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "各 Agent 的辩论立场（debate 模式可选），长度需与 agents 一致。"
+                                   "例如 agents=['researcher','researcher'],"
+                                   "perspectives=['论证程序员前景更好','论证硬件工程师前景更好']"
+                                   "不填时所有 agent 使用同一个 task",
                 },
                 "goal": {
                     "type": "string",
