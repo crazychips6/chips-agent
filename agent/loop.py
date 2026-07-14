@@ -437,7 +437,7 @@ class AIAgent:
     def _classify_intent(self, user_message: str) -> dict:
         """调用小模型分类，返回路由决策。"""
         if self._fast_llm is not None and self._fast_llm.is_available():
-            result = self._fast_llm.classify(user_message)
+            result = self._fast_llm.classify(user_message, session_id=self.session_id)
         else:
             if self._fast_llm is not None:
                 import sys
@@ -847,6 +847,12 @@ class AIAgent:
                             from gateway.metrics import tool_calls_total, tool_duration_seconds
                             tool_calls_total.labels(tool_name=name, status=tool_status).inc()
                             tool_duration_seconds.labels(tool_name=name).observe(elapsed / 1000.0)
+                        except Exception:
+                            pass
+                        # 工具调用统计
+                        try:
+                            from agent.tool_stats import tool_stats
+                            tool_stats.record(name, success=(tool_status == "success"), duration_ms=elapsed)
                         except Exception:
                             pass
                         # TUI 工具回调（调用后）
