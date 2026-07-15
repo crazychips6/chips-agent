@@ -1,0 +1,60 @@
+# Cassette: 天气查询示例
+# 录制时间: 2026-07-13
+# 录制方式: 真实 DeepSeek API 调用后保存
+#
+# 评价方式:
+#   from gateway.evaluate import CassetteEvaluator
+#   evaluator = CassetteEvaluator("test/cassettes/weather_query.yaml")
+#   result = evaluator.evaluate_trace(trace)
+#   result.print_report()
+#
+# expect 字段可手动修改，定义评价标准。
+
+meta:
+  recorded_at: "2026-07-13T10:00:00+08:00"
+  model: "deepseek-chat"
+  interaction_count: 2
+  strategy: sequential
+
+  # ── 评价规则（可手动编辑） ──
+  expect:
+    final_output:
+      contains: ["天气"]          # 输出必须包含的关键词
+      not_contains: ["错误", "抱歉"]  # 输出不能包含的关键词
+      regex: "\\d+°C"              # 输出应包含温度数字
+    tool_calls:
+      min_count: 1                 # 最少工具调用次数
+      max_count: 3                 # 最多工具调用次数
+      names: ["get_weather"]       # 必须出现的工具名
+      sequence_contains: ["get_weather"]  # 调用顺序应包含此序列
+      args_match:
+        get_weather:               # 工具参数检查
+          city: "北京"
+    max_llm_calls: 5               # LLM 调用次数上限
+
+interactions:
+- request:
+    messages:
+    - role: user
+      content: "北京今天天气怎么样？"
+    model: "deepseek-chat"
+    stream: false
+    kwargs: {}
+  response:
+    content: "北京今天（7月13日）天气晴朗，气温 28-35°C，南风 2-3 级，紫外线强，建议做好防晒。"
+    usage:
+      prompt_tokens: 15
+      completion_tokens: 42
+
+- request:
+    messages:
+    - role: user
+      content: "上海呢？"
+    model: "deepseek-chat"
+    stream: false
+    kwargs: {}
+  response:
+    content: "上海今天多云转阴，气温 26-32°C，有短时阵雨，建议携带雨具。"
+    usage:
+      prompt_tokens: 10
+      completion_tokens: 30
