@@ -40,6 +40,7 @@ TOOLSET_SCHEMA: dict[str, dict[str, Any]] = {
     "process":  {"description": "进程管理"},
     "sub_agent": {"description": "子 Agent 执行记录查询"},
     "document": {"description": "文档解析与 OCR（PDF/DOCX/TXT/EML/MSG/图片）"},
+    "wiki": {"description": "个人知识库（Ingest / Query / Lint）"},
     "all": {
         "description": "全部可用工具",
         "includes": ["core", "web", "vision", "skills", "calendar", "system", "process", "document"],

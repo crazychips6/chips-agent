@@ -559,6 +559,15 @@ class AIAgent:
             if hint:
                 tag = f"{intent}-task-hint"
                 system += f"\n\n<{tag}>\n{hint.strip()}\n</{tag}>"
+        # Wiki 知识库上下文注入（若用户消息匹配已有知识，注入供 LLM 引用）
+        try:
+            from wiki.config import get_wiki_dir
+            from wiki.bridge import inject_wiki_context
+            wiki_ctx = inject_wiki_context(user_message, get_wiki_dir())
+            if wiki_ctx:
+                system += "\n\n" + wiki_ctx
+        except Exception:
+            pass
         self.messages.append({"role": "user", "content": parse_user_content(_sanitize(user_message))})
 
         self.memory_manager.initialize_all(session_id=self.session_id)
@@ -939,6 +948,20 @@ class AIAgent:
             self.memory_manager.on_session_end(self.messages)
             self._collect_trace(user_message, last_text_reply)
             self._analyze_and_learn(user_message, last_text_reply)
+            # Wiki 自动捕获（每 3 轮采样一次，避免过度捕获 + token 浪费）
+            try:
+                if self.turn_count > 0 and self.turn_count % 3 == 0:
+                    from wiki.config import get_wiki_dir
+                    from wiki.bridge import auto_capture_from_session
+                    cap_result = auto_capture_from_session(
+                        self.messages, self.gateway, self.model,
+                        get_wiki_dir(),
+                        intent=self._routing.get("intent", ""),
+                    )
+                    if cap_result.get("captured"):
+                        logger.info("wiki_auto_captured count=%d", cap_result.get("count", 0))
+            except Exception:
+                pass
             if self.plugin_manager:
                 self.plugin_manager.dispatch_session_end(self.messages)
 
