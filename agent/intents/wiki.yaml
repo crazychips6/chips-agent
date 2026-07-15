@@ -1,0 +1,35 @@
+name: wiki
+model: large
+tools:
+  - wiki_ingest
+  - wiki_read_index
+  - wiki_read_page
+  - wiki_search_pages
+  - wiki_lint
+keywords:
+  - wiki
+  - 知识库
+  - 笔记
+  - 记录
+  - 摄入
+  - 查询
+  - lint
+  - 健康检查
+rules:
+  - type: contains
+    values:
+      - 摄入 wiki
+      - 写入 wiki
+      - "wiki 摄入"
+  - type: contains
+    values:
+      - 查 wiki
+      - 查询 wiki
+      - 查一下 wiki
+  - type: contains
+    values:
+      - wiki lint
+      - 检查 wiki
+      - wiki 检查
+      - wiki 健康
+prompt_hint: "用户想操作个人知识库（wiki）。提供三个功能：wiki_ingest（摄入新文件自动提取概念/实体/决策写入选定目录）、wiki_read_index（读取索引概览）、wiki_read_page（读取指定页面内容）、wiki_search_pages（按关键词搜索）、wiki_lint（健康检查）。用 wiki_read_index 先看有什么，再用 wiki_read_page 读具体的。"
