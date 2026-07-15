@@ -23,3 +23,6 @@ chipsfun_web/
 
 # 前端构建产物（源码在 chips-agent-web/src/）
 web/static/
+
+# MiMoCode 配置目录
+.mimocode/
