@@ -1,6 +1,6 @@
-"""agent.retry 模块测试"""
+"""utils.retry 模块测试"""
 
-from agent.retry import jittered_backoff
+from utils.retry import jittered_backoff
 
 
 class TestJitteredBackoff:

@@ -12,7 +12,7 @@ from typing import Any
 import openai
 from openai import OpenAI
 
-from agent.retry import jittered_backoff
+from utils.retry import jittered_backoff
 from gateway.protocol import ModelGateway
 from gateway.types import ChatResult
 
