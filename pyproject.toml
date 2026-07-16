@@ -61,6 +61,7 @@ include = [
     "knowledge*",
     "rules*",
     "endpoint*",
+    "utils*",
     "test*",
 ]
 
