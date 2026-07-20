@@ -59,40 +59,76 @@ class KnowledgeManager:
         else:
             self._entries = []
 
-    def match(self, user_message: str, max_results: int = 3) -> list[dict[str, Any]]:
+    def match(self, user_message: str, intent: str = "", max_results: int = 3) -> list[dict[str, Any]]:
         """匹配用户消息，返回最相关的知识条目。
 
-        匹配规则：triggers 关键字命中 → 按置信度排序 → 取 top N。
+        匹配策略（三路加权）：
+        1. 意图匹配（权重 0.4）
+        2. 关键词匹配（权重 0.3）
+        3. 模式匹配（权重 0.3）
         """
-        matched = []
+        scored = []
         for entry in self._entries:
-            triggers = entry.get("triggers", [])
-            if any(t in user_message for t in triggers):
-                matched.append(entry)
+            score = 0.0
 
-        matched.sort(
-            key=lambda e: _CONFIDENCE_ORDER.get(e.get("confidence", "observed"), 0),
+            # 1. 意图匹配（权重 0.4）
+            if intent and entry.get("intent") == intent:
+                score += 0.4
+
+            # 2. 关键词匹配（权重 0.3）
+            triggers = entry.get("triggers", [])
+            if triggers:
+                keyword_hits = sum(1 for t in triggers if t in user_message)
+                score += 0.3 * min(keyword_hits / max(len(triggers), 1), 1.0)
+
+            # 3. 模式匹配（权重 0.3）
+            pattern = entry.get("pattern", "")
+            if pattern and pattern in user_message:
+                score += 0.3
+
+            # 最低阈值
+            if score > 0.1:
+                scored.append((score, entry))
+
+        # 按 score × confidence 排序
+        scored.sort(
+            key=lambda x: x[0] * _CONFIDENCE_ORDER.get(x[1].get("confidence", "observed"), 1),
             reverse=True,
         )
-        return matched[:max_results]
+        return [entry for _, entry in scored[:max_results]]
 
     def format_knowledge(self, entries: list[dict[str, Any]]) -> str:
         """格式化为 prompt 注入文本。"""
         if not entries:
             return ""
-        lines = ["# 经验知识"]
+        lines = ["# 经验知识（从历史执行中学习）"]
         for e in entries:
+            c = e.get("confidence", "observed")
             icon = {
                 "authoritative": "✅",
                 "recommended": "📌",
                 "candidate": "💡",
                 "observed": "🔍",
-            }
-            c = e.get("confidence", "observed")
-            lines.append(f"{icon.get(c, '•')} {e['task']} → {e['inject']}")
+            }.get(c, "•")
+
+            lines.append(f"\n{icon} **{e.get('task', 'unknown')}** (置信度: {c})")
+
+            summary = e.get("summary", e.get("inject", ""))
+            if summary:
+                lines.append(f"  策略: {summary}")
+
+            anti = e.get("anti_patterns", [])
             avoid = e.get("avoid", "")
-            if avoid:
-                lines.append(f"   ⚠ {avoid}")
+            if avoid and avoid not in anti:
+                anti.append(avoid)
+            if anti:
+                lines.append(f"  ⚠ 避免: {'; '.join(anti[:2])}")
+
+            steps = e.get("steps", [])
+            if steps:
+                path = " → ".join(s.get("tool", "?") for s in steps[:4])
+                lines.append(f"  路径: {path}")
+
         return "\n".join(lines)
 
     # ── Staging（待审核知识） ──
@@ -100,24 +136,37 @@ class KnowledgeManager:
     _STAGING_DIR = "staging"
 
     def save_to_staging(self, analysis: dict) -> str | None:
-        """将小模型分析结果保存到 staging 区。返回 staging 文件 ID 或 None。"""
-        optimal = analysis.get("optimal", "").strip()
-        if not optimal:
-            logger.info("staging_skip: empty optimal")
+        """将小模型分析结果保存到 staging 区。返回 staging 文件 ID 或 None。
+
+        支持新旧两种分析格式：
+        - 旧格式：{task, optimal, waste, tokens_saved_estimate}
+        - 新格式：{task, triggers, pattern, steps, summary, anti_patterns, pitfalls, ...}
+        """
+        # 兼容新旧格式
+        summary = analysis.get("summary", analysis.get("optimal", "")).strip()
+        if not summary:
+            logger.info("staging_skip: empty summary")
             return None
 
         entry = {
             "id": f"{_normalize_task(analysis.get('task', 'unknown'))}-{int(time.time())}",
             "task": analysis.get("task", "unknown"),
-            "triggers": [],
-            "inject": optimal,
-            "avoid": "; ".join(analysis.get("waste", [])),
+            "triggers": analysis.get("triggers", []),
+            "intent": analysis.get("intent", ""),
+            "pattern": analysis.get("pattern", ""),
+            "summary": summary,
+            "inject": summary,  # 兼容旧格式
+            "steps": analysis.get("steps", []),
+            "anti_patterns": analysis.get("anti_patterns", []),
+            "pitfalls": analysis.get("pitfalls", []),
+            "avoid": "; ".join(analysis.get("waste", [])),  # 兼容旧格式
             "confidence": "candidate",
+            "quality_score": analysis.get("quality_score", 0.8),
             "stats": {
                 "success_count": 0,
                 "fail_count": 0,
                 "avg_tokens": analysis.get("tokens_saved_estimate", 0),
-                "avg_steps": 0,
+                "avg_steps": len(analysis.get("steps", [])),
                 "last_used": "",
             },
         }
@@ -264,6 +313,69 @@ class KnowledgeManager:
             )
         except Exception as exc:
             logger.warning("knowledge_git_commit_failed: %s", exc)
+
+    # ── 统计更新与自动升降级 ──
+
+    def update_stats(self, entry_id: str, success: bool):
+        """更新知识条目的统计数据。"""
+        for entry in self._entries:
+            if entry.get("id") == entry_id:
+                stats = entry.get("stats", {})
+                if success:
+                    stats["success_count"] = stats.get("success_count", 0) + 1
+                else:
+                    stats["fail_count"] = stats.get("fail_count", 0) + 1
+                stats["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                entry["stats"] = stats
+
+                # 自动升降级
+                self._auto_upgrade(entry)
+                self._save()
+                return
+
+    def update_stats_by_task(self, task: str, intent: str, success: bool):
+        """根据任务名更新匹配的条目统计。"""
+        for entry in self._entries:
+            if entry.get("task") == task or entry.get("intent") == intent:
+                self.update_stats(entry.get("id", ""), success)
+
+    def _auto_upgrade(self, entry: dict):
+        """根据成功率自动升降置信度。"""
+        stats = entry.get("stats", {})
+        total = stats.get("success_count", 0) + stats.get("fail_count", 0)
+        if total < 5:
+            return
+
+        success_count = stats.get("success_count", 0)
+        rate = success_count / total if total > 0 else 0
+
+        current_conf = entry.get("confidence", "observed")
+        current_level = _CONFIDENCE_ORDER.get(current_conf, 0)
+
+        if rate >= 0.8 and current_level < 3:
+            # 升级
+            for name, level in _CONFIDENCE_ORDER.items():
+                if level == current_level + 1:
+                    entry["confidence"] = name
+                    logger.info("knowledge_upgrade id=%s from=%s to=%s rate=%.2f",
+                                entry.get("id"), current_conf, name, rate)
+                    break
+        elif rate < 0.5 and current_level > 0:
+            # 降级
+            for name, level in _CONFIDENCE_ORDER.items():
+                if level == current_level - 1:
+                    entry["confidence"] = name
+                    logger.info("knowledge_downgrade id=%s from=%s to=%s rate=%.2f",
+                                entry.get("id"), current_conf, name, rate)
+                    break
+
+    def get_by_task(self, task: str) -> list[dict]:
+        """根据任务名获取所有相关条目。"""
+        return [e for e in self._entries if e.get("task") == task]
+
+    def get_by_intent(self, intent: str) -> list[dict]:
+        """根据意图获取所有相关条目。"""
+        return [e for e in self._entries if e.get("intent") == intent]
 
 
 def _normalize_task(task: str) -> str:

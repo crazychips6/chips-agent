@@ -2,6 +2,16 @@
 name: web_search
 model: large
 tools: "all"
+description: |
+  搜索互联网获取最新信息。典型场景：
+  - 用户问"今天天气怎么样"
+  - 用户问"最新科技新闻"
+  - 用户问"Python 3.12 有什么新特性"
+  关键特征：包含时间词（今天、最新）、搜索动作词（查一下、搜一下）
+tool_priorities:
+  web: 1.0
+  fetch: 0.8
+  file: 0.2
 keywords:
   - 现在
   - 最新

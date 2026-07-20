@@ -2,6 +2,17 @@
 name: complex
 model: large
 tools: "all"
+description: |
+  需要多步骤协作的复杂任务。典型场景：
+  - 需要同时查资料和写代码
+  - 需要操作多个独立文件或模块
+  - 需要先调研再做决策
+  关键特征：包含分析词（分析、比较、评估）、设计词（方案、架构、设计）
+tool_priorities:
+  file: 0.8
+  exec: 0.7
+  web: 0.6
+  orchestrate: 0.9
 keywords:
   - 分析
   - 比较

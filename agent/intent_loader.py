@@ -30,6 +30,9 @@ class IntentDef:
         self.time_sensitive: bool = data.get("time_sensitive", False)
         self.prompt_hint: str = data.get("prompt_hint", "")
         self.rules: list[dict[str, Any]] = data.get("rules", [])
+        # 新增：语义描述和工具优先级
+        self.description: str = data.get("description", "")
+        self.tool_priorities: dict[str, float] = data.get("tool_priorities", {})
 
     def to_route(self) -> dict[str, Any]:
         """转为路由表格式。"""
@@ -98,6 +101,16 @@ class IntentRegistry:
         """检查意图是否时间敏感。"""
         intent = self._intents.get(name)
         return intent.time_sensitive if intent else False
+
+    def get_description(self, name: str) -> str:
+        """获取意图的语义描述。"""
+        intent = self._intents.get(name)
+        return intent.description if intent else ""
+
+    def get_tool_priorities(self, name: str) -> dict[str, float]:
+        """获取意图的工具优先级。"""
+        intent = self._intents.get(name)
+        return intent.tool_priorities if intent else {}
 
 
 # 模块级单例

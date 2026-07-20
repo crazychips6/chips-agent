@@ -2,6 +2,16 @@
 name: simple_coding
 model: large
 tools: "all"
+description: |
+  编写、调试、修改代码。典型场景：
+  - 用户要写一个函数或脚本
+  - 用户要修复 bug
+  - 用户要修改现有代码
+  关键特征：包含编程词（函数、脚本、代码）、调试词（bug、修复、debug）
+tool_priorities:
+  file: 1.0
+  exec: 0.8
+  bash: 0.6
 keywords:
   - 写代码
   - 代码

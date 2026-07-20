@@ -1,13 +1,19 @@
-"""ContextCompressor — 默认上下文压缩引擎
+"""ContextCompressor — 智能上下文压缩引擎
 
-流程:
+基础流程:
   1. 裁剪旧 tool 结果（免费，不调 LLM）
   2. 保护头部（system + 前 N 轮）
   3. 按 token 预算保护尾部（最近 ~20K tokens）
   4. LLM 摘要中间轮次
   5. 组装 + 修复 tool_call/tool_result 配对
 
-参考: Hermes ContextCompressor 设计。
+增强特性（2.0）:
+  - 重要性感知：工具调用结果比闲聊更重要
+  - 引用追踪：追踪哪些信息被后续消息引用过
+  - 时间衰减：旧信息权重降低
+  - 主动遗忘：未被引用的信息优先遗忘
+
+参考: Hermes ContextCompressor 设计 + MemGPT 分层记忆。
 """
 
 from __future__ import annotations
@@ -30,6 +36,102 @@ _SUMMARY_PREFIX = (
 _MIN_SUMMARY_TOKENS = 1000
 _MAX_SUMMARY_TOKENS = 4000
 _PRUNED_PLACEHOLDER = "[Tool output pruned to save context space]"
+
+# ── 重要性评分常量 ──
+
+# 不同消息类型的基础重要性
+_IMPORTANCE_BASE = {
+    "system": 1.0,      # system prompt 最重要
+    "tool": 0.8,        # 工具结果次之
+    "assistant": 0.6,   # AI 回复中等
+    "user": 0.5,        # 用户消息中等
+}
+
+# 工具类型重要性调整
+_TOOL_IMPORTANCE = {
+    "exec": 0.9,        # 执行结果很重要
+    "bash": 0.9,
+    "read": 0.8,        # 文件读取结果重要
+    "file": 0.8,
+    "document": 0.8,
+    "web": 0.7,         # 搜索结果次之
+    "fetch": 0.7,
+    "memory_search": 0.6,
+    "memory_add": 0.5,
+}
+
+# 引用加成
+_REFERENCE_BOOST = 0.3
+
+# 时间衰减系数（每轮衰减）
+_TIME_DECAY = 0.05
+
+
+def _compute_importance(
+    msg: dict,
+    turn_index: int,
+    total_turns: int,
+    reference_count: int = 0,
+) -> float:
+    """计算消息的重要性分数 (0.0 - 1.0)。
+
+    考虑因素：
+    1. 消息类型（tool > assistant > user）
+    2. 工具类型（exec/read > web/memory）
+    3. 引用次数（被后续消息引用的更重要）
+    4. 时间衰减（越旧越不重要）
+    """
+    role = msg.get("role", "user")
+    base = _IMPORTANCE_BASE.get(role, 0.5)
+
+    # 工具类型调整
+    if role == "tool":
+        tool_name = msg.get("tool_name", "")
+        tool_boost = _TOOL_IMPORTANCE.get(tool_name, 0.5)
+        base = (base + tool_boost) / 2
+
+    # 引用加成
+    if reference_count > 0:
+        base += _REFERENCE_BOOST * min(reference_count / 3, 1.0)
+
+    # 时间衰减（越旧越不重要）
+    age = total_turns - turn_index
+    decay = max(0, 1.0 - age * _TIME_DECAY)
+    base *= decay
+
+    return min(max(base, 0.0), 1.0)
+
+
+def _count_references(messages: list[dict], idx: int) -> int:
+    """统计消息 idx 的内容被后续消息引用的次数。"""
+    if idx >= len(messages) - 1:
+        return 0
+
+    content = messages[idx].get("content", "")
+    if isinstance(content, list):
+        content = " ".join(
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in content
+        )
+    if not content or len(content) < 10:
+        return 0
+
+    # 提取关键片段（取前 50 字符作为特征）
+    feature = content[:50].strip()
+    if not feature:
+        return 0
+
+    count = 0
+    for i in range(idx + 1, len(messages)):
+        later_content = messages[i].get("content", "")
+        if isinstance(later_content, list):
+            later_content = " ".join(
+                b.get("text", "") if isinstance(b, dict) else str(b)
+                for b in later_content
+            )
+        if feature in later_content:
+            count += 1
+    return count
 
 
 def _content_len(content: Any) -> int:
@@ -137,16 +239,18 @@ class ContextCompressor(ContextEngine):
             return False
         return tokens >= self.threshold_tokens
 
-    # ── 工具结果裁剪 ──
+    # ── 工具结果裁剪（重要性感知） ──
 
     def _prune_tool_results(
         self, messages: list[dict],
     ) -> tuple[list[dict], int]:
-        """将旧的 tool 结果替换为一行摘要。"""
+        """将旧的 tool 结果替换为一行摘要（基于重要性评分）。"""
         if not messages:
             return messages, 0
 
         result = [m.copy() for m in messages]
+        total_turns = len(result)
+
         # 构建 tool_call_id → (name, args) 索引
         call_map: dict[str, tuple[str, str]] = {}
         for msg in result:
@@ -155,6 +259,13 @@ class ContextCompressor(ContextEngine):
                     cid = tc.get("id", "") if isinstance(tc, dict) else ""
                     fn = tc.get("function", {}) if isinstance(tc, dict) else {}
                     call_map[cid] = (fn.get("name", "?"), fn.get("arguments", ""))
+
+        # 计算每条消息的重要性
+        importance_scores = []
+        for i, msg in enumerate(result):
+            refs = _count_references(result, i)
+            score = _compute_importance(msg, i, total_turns, refs)
+            importance_scores.append(score)
 
         prune_boundary = max(0, len(result) - self.protect_first_n * 2)
         pruned = 0
@@ -165,6 +276,11 @@ class ContextCompressor(ContextEngine):
             content = msg.get("content", "")
             if not content or isinstance(content, list) or len(content) <= 200:
                 continue
+
+            # 重要性高的工具结果不裁剪
+            if importance_scores[i] > 0.7:
+                continue
+
             cid = msg.get("tool_call_id", "")
             tool_name, args_str = call_map.get(cid, ("?", "{}"))
             result[i] = {**msg, "content": _tool_summary(tool_name, args_str, content)}
@@ -212,12 +328,13 @@ class ContextCompressor(ContextEngine):
             idx = check
         return max(idx, 0)
 
-    # ── 摘要生成 ──
+    # ── 摘要生成（重要性感知） ──
 
     def _serialize_for_summary(self, turns: list[dict]) -> str:
-        """将中间轮次序列化为摘要模型的输入文本。"""
+        """将中间轮次序列化为摘要模型的输入文本（包含重要性标记）。"""
+        total_turns = len(turns)
         parts = []
-        for msg in turns:
+        for i, msg in enumerate(turns):
             role = msg.get("role", "unknown")
             content = msg.get("content") or ""
             if isinstance(content, list):
@@ -225,8 +342,14 @@ class ContextCompressor(ContextEngine):
                     b.get("text", "") if isinstance(b, dict) else str(b)
                     for b in content
                 )
+
+            # 计算重要性
+            refs = _count_references(turns, i)
+            importance = _compute_importance(msg, i, total_turns, refs)
+            importance_tag = " [IMPORTANT]" if importance > 0.7 else ""
+
             if role == "tool":
-                parts.append(f"[TOOL RESULT]: {content[:2000]}")
+                parts.append(f"[TOOL RESULT]{importance_tag}: {content[:2000]}")
             elif role == "assistant":
                 tcs = msg.get("tool_calls") or []
                 tc_text = ""
@@ -236,9 +359,9 @@ class ContextCompressor(ContextEngine):
                         fn = tc.get("function", {}) if isinstance(tc, dict) else {}
                         tc_lines.append(f"  {fn.get('name', '?')}({fn.get('arguments', '')[:500]})")
                     tc_text = "\n[Tool calls:\n" + "\n".join(tc_lines) + "\n]"
-                parts.append(f"[ASSISTANT]: {content[:3000]}{tc_text}")
+                parts.append(f"[ASSISTANT]{importance_tag}: {content[:3000]}{tc_text}")
             else:
-                parts.append(f"[{role.upper()}]: {content[:3000]}")
+                parts.append(f"[{role.upper()}]{importance_tag}: {content[:3000]}")
         return "\n\n".join(parts)
 
     def _generate_summary(self, turns: list[dict]) -> str | None:
@@ -368,6 +491,33 @@ Target ~{min(self.summary_max_tokens, 2000)} tokens. Be concrete — include fil
             messages = patched
 
         return messages
+
+    # ── 重要性分析 ──
+
+    def analyze_importance(self, messages: list[dict]) -> list[dict]:
+        """分析每条消息的重要性，返回带分数的消息列表。
+
+        返回格式：[{role, content_preview, importance, references}, ...]
+        """
+        total_turns = len(messages)
+        results = []
+        for i, msg in enumerate(messages):
+            refs = _count_references(messages, i)
+            importance = _compute_importance(msg, i, total_turns, refs)
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content
+                )
+            results.append({
+                "index": i,
+                "role": msg.get("role", "unknown"),
+                "content_preview": (content or "")[:100],
+                "importance": round(importance, 3),
+                "references": refs,
+            })
+        return results
 
     # ── 主入口 ──
 

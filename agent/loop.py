@@ -534,7 +534,9 @@ class AIAgent:
             from knowledge.manager import KnowledgeManager
             if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
                 self._knowledge_manager = KnowledgeManager()
-            knowledge_entries = self._knowledge_manager.match(user_message)
+            # 传递 intent 给 match 方法，支持意图感知匹配
+            intent = self._routing.get("intent", "")
+            knowledge_entries = self._knowledge_manager.match(user_message, intent=intent)
             knowledge = self._knowledge_manager.format_knowledge(knowledge_entries)
             from tool.toolsets import build_availability_table
             avail = build_availability_table()
@@ -627,14 +629,26 @@ class AIAgent:
         if not hasattr(self, '_knowledge_manager') or self._knowledge_manager is None:
             self._knowledge_manager = KnowledgeManager()
 
-        analysis = self._fast_llm.analyze_trace(trace)
-        if not analysis.get("optimal"):
+        # 传递 intent 给 analyze_trace
+        intent = self._routing.get("intent", "")
+        analysis = self._fast_llm.analyze_trace(trace, intent=intent)
+
+        # 支持新旧两种格式
+        optimal = analysis.get("optimal") or analysis.get("summary", "")
+        if not optimal:
+            return
+
+        # quality_score 过滤（新格式）
+        quality_score = analysis.get("quality_score", 0.8)
+        if quality_score < 0.4:
+            logger.info("knowledge_skip_low_quality score=%.2f", quality_score)
             return
 
         staging_id = self._knowledge_manager.save_to_staging(analysis)
         if staging_id:
-            logger.info("knowledge_learned id=%s task=%s optimal=%s",
-                         staging_id, analysis.get("task"), analysis.get("optimal", "")[:40])
+            logger.info("knowledge_learned id=%s task=%s summary=%s quality=%.2f",
+                         staging_id, analysis.get("task", "unknown"),
+                         optimal[:40], quality_score)
 
     # ── 主循环 ──
 
@@ -713,20 +727,33 @@ class AIAgent:
                     if self.registry:
                         scope = self._routing.get("_model_scope")
                         defs = self.registry.get_definitions(self.tool_names, model_scope=scope)
-                        # 根据 intent 过滤工具（所有通道生效）
-                        intent = self._routing.get("intent", "other")
-                        from agent.intent_config import get_tools_for_intent
-                        allowed = get_tools_for_intent(intent)
-                        if isinstance(allowed, list):
-                            allowed_set = set(allowed)
+                        # 工具过滤：优先使用语义路由的动态工具集，fallback 到静态配置
+                        dynamic_tools = self._routing.get("predicted_tools", [])
+                        if dynamic_tools:
+                            # 语义路由返回的动态工具集
+                            allowed_set = set(dynamic_tools)
                             defs = [d for d in defs
                                     if d.get("function", d).get("name") in allowed_set]
+                        else:
+                            # fallback: 使用静态意图配置
+                            intent = self._routing.get("intent", "other")
+                            from agent.intent_config import get_tools_for_intent
+                            allowed = get_tools_for_intent(intent)
+                            if isinstance(allowed, list):
+                                allowed_set = set(allowed)
+                                defs = [d for d in defs
+                                        if d.get("function", d).get("name") in allowed_set]
                         tools.extend(defs)
+                    # 记忆工具：如果语义路由指定了工具集，则过滤；否则全部添加
                     mem_schemas = self.memory_manager.get_all_tool_schemas()
                     existing_names = {s.get("function", s).get("name") for s in tools}
+                    dynamic_tools = self._routing.get("predicted_tools", [])
                     for s in mem_schemas:
                         name = s.get("function", s).get("name") or s.get("name", "")
                         if not name or name in existing_names:
+                            continue
+                        # 如果语义路由指定了工具集，记忆工具也需要在集合中
+                        if dynamic_tools and name not in dynamic_tools:
                             continue
                         if "type" not in s:
                             s = {"type": "function", "function": s}

@@ -2,6 +2,16 @@
 name: delegate
 model: large
 tools: "all"
+description: |
+  需要多 Agent 协作的复杂任务。典型场景：
+  - 用户要求并行执行多个独立任务
+  - 用户要求分工协作
+  - 任务复杂度高，需要分解
+  关键特征：协作词（委派、并行、团队、多人）
+tool_priorities:
+  orchestrate: 1.0
+  sub_agent: 0.9
+  delegate_task: 0.8
 keywords:
   - 委派
   - 子任务

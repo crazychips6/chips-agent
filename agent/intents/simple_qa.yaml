@@ -2,6 +2,13 @@
 name: simple_qa
 model: small
 tools: []
+description: |
+  简单常识问题，模型直接回答。典型场景：
+  - 用户问"什么是 XXX"
+  - 用户问"XXX 怎么读"
+  - 用户问时间、地点等简单问题
+  关键特征：疑问词（什么是、哪里、谁是、多少钱）
+tool_priorities: {}
 keywords:
   - 什么是
   - 怎么读

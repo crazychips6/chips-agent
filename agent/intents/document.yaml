@@ -4,6 +4,15 @@ model: large
 tools:
   - document
   - file
+description: |
+  解析和提取文档内容。典型场景：
+  - 用户要读取 PDF、DOCX、TXT 等文档
+  - 用户要提取文档中的文字
+  - 用户要对文档做 OCR 识别
+  关键特征：包含文件扩展名（.pdf, .docx）、文档操作词（解析、提取、OCR）
+tool_priorities:
+  document: 1.0
+  file: 0.6
 keywords:
   - .pdf
   - .docx

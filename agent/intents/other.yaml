@@ -2,4 +2,8 @@
 name: other
 model: large
 tools: "all"
+description: |
+  其他未归类的任务，走完整 ReAct 循环。
+  当用户请求无法被其他意图匹配时，使用此兜底意图。
+tool_priorities: {}
 keywords: []

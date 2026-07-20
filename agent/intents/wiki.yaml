@@ -6,6 +6,18 @@ tools:
   - wiki_read_page
   - wiki_search_pages
   - wiki_lint
+description: |
+  操作个人知识库（Wiki）。典型场景：
+  - 用户要导入文件到知识库
+  - 用户要搜索知识库内容
+  - 用户要读取知识库页面
+  关键特征：Wiki 相关词（知识库、笔记、摄入、lint）
+tool_priorities:
+  wiki_ingest: 1.0
+  wiki_read_index: 0.9
+  wiki_read_page: 0.9
+  wiki_search_pages: 0.9
+  wiki_lint: 0.7
 keywords:
   - wiki
   - 知识库

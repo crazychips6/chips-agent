@@ -2,6 +2,12 @@
 name: greeting
 model: small
 tools: []
+description: |
+  简单问候和打招呼。典型场景：
+  - 用户说"你好"、"Hi"、"早上好"
+  - 纯粹的社交性问候，不需要工具
+  关键特征：问候词（你好、Hi、Hello、在吗）
+tool_priorities: {}
 keywords:
   - 你好
   - 您好
