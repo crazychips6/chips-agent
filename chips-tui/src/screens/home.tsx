@@ -28,13 +28,9 @@ export const Home: Component<HomeProps> = (props) => {
           <textarea
             placeholder="给 chips 发消息..."
             height={3}
-            onKeydown={(e) => {
-              if (e.key === "Enter" && e.ctrl) {
-                const text = e.target.value
-                if (text.trim()) {
-                  props.onSend(text.trim())
-                }
-              }
+            onSubmit={() => {
+              // onSubmit 不传递内容
+              console.log("Submit triggered")
             }}
           />
         </box>

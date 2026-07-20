@@ -22,6 +22,9 @@ const LOGO_THIN = {
 const ORANGE = "#FB8147"
 const GRAY = "#A0A0A0"
 
+// TextAttributes.BOLD = 1
+const BOLD = 1
+
 export const Logo: Component = () => {
   return (
     <box flexDirection="column" alignItems="center">
@@ -31,14 +34,14 @@ export const Logo: Component = () => {
         return (
           <box flexDirection="row" gap={1}>
             <text
-              color={isLabel ? GRAY : ORANGE}
-              bold
+              fg={isLabel ? GRAY : ORANGE}
+              attributes={BOLD}
             >
               {left}
             </text>
             <text
-              color={GRAY}
-              bold
+              fg={GRAY}
+              attributes={BOLD}
             >
               {right}
             </text>

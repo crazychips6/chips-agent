@@ -84,10 +84,11 @@ function App() {
       )}
       {route().type === "chat" && (
         <Chat 
-          sessionId={route().sessionId}
+          sessionId={(route() as { type: "chat"; sessionId: string }).sessionId}
           onSend={async (text) => {
             let result = ""
-            for await (const chunk of streamMessage(route().sessionId, text)) {
+            const sessionId = (route() as { type: "chat"; sessionId: string }).sessionId
+            for await (const chunk of streamMessage(sessionId, text)) {
               result += chunk
             }
             return result
